@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>Satr.ico</ApplicationIcon>
+    <Version>0.2.0-preview.1</Version>
+    <Authors>Mohamad Salah</Authors>
+    <Product>Satr</Product>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Satr.PortChecks" />
+    <AvaloniaResource Include="Satr.ico" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+    <PackageReference Include="Porta.Pty" Version="2.2.2" />
+    <PackageReference Include="Unicode.Bidi" Version="0.3.18" />
+  </ItemGroup>
+</Project>
