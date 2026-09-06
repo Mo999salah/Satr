@@ -1,0 +1,22 @@
+name: Build preview
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build self-contained previews (no runtime tests)
+        shell: pwsh
+        run: ./scripts/Build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Satr-preview
+          path: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/SHA256SUMS.txt
