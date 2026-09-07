@@ -19,26 +19,28 @@ public sealed partial class MainWindow : Window
         FontFamily = new FontFamily(OperatingSystem.IsWindows() ? "Cascadia Mono, JetBrains Mono, Consolas, Segoe UI" : "JetBrains Mono, DejaVu Sans Mono, Noto Sans Arabic") };
     private readonly TextBlock _status = new() { Text = "Ready", TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Ui.Muted, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _path = new() { TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Ui.Muted, VerticalAlignment = VerticalAlignment.Center, FlowDirection = FlowDirection.LeftToRight };
-    private readonly TabControl _tabStrip = new() { MinHeight = 36, MaxHeight = 40, Padding = new Thickness(0), Background = Brushes.Transparent };
+    private readonly ListBox _tabStrip = new() { Padding = new Thickness(0), Background = Brushes.Transparent };
     private readonly Grid _workspace = new();
     private readonly List<Tab> _tabs = [];
     private readonly DispatcherTimer _render = new() { Interval = TimeSpan.FromMilliseconds(33) };
     private readonly CancellationTokenSource _shutdown = new();
     private FileStream? _instanceLock;
     private Tab? _active;
-    private bool _loading, _saveEnabled, _closed, _closing, _smartRtl = true;
+    private bool _loading, _saveEnabled, _closed, _closing, _smartRtl = true, _restoredFromBackup;
     private double _cellWidth = 9.6, _lineHeight = 24;
     private string _directory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     // Retain legacy editor drafts in saved workspaces; removing the UI must not discard user data.
     private sealed class Tab(string profile, string directory, string draft, bool rtl)
     {
-        public string Profile = profile, Directory = directory, Draft = draft;
+        public string Profile = profile, Directory = directory, Project = directory, Draft = draft;
         public string? CustomTitle;
         public string State = "Ready to start";
         public TextBlock Label = new();
+        public TextBlock Detail = new();
+        public Border ProjectHeading = new();
         public Border Pip = Ui.Pip();
-        public bool Rtl = rtl, Starting, Closed, Finished, Dirty = true, Follow = true;
+        public bool Rtl = rtl, Starting, Closed, Finished, Dirty = true, Follow = true, AwaitingLaunch;
         public int Columns = 80, Rows = 24;
         public TerminalBuffer Buffer = new(80, 24);
         public PtySession? Session;
@@ -46,7 +48,7 @@ public sealed partial class MainWindow : Window
         public long SynchronizedSince;
         public double Offset;
         public ((int Row, int Offset)? Anchor, (int Row, int Offset)? End) Selection;
-        public TabItem Header = new();
+        public ListBoxItem Header = new();
     }
 
     public MainWindow()
@@ -56,7 +58,12 @@ public sealed partial class MainWindow : Window
         Ui.Paint(this); FontSize = 13;
         var fresh = Ui.Ghost("New", () => { }, "New session — Ctrl+Shift+T for shell, Ctrl+Shift+P for all types");
         fresh.ContextMenu = BuildNewSessionMenu();
-        fresh.Click += (_, _) => fresh.ContextMenu?.Open(fresh);
+        fresh.Click += (_, _) =>
+        {
+            if (fresh.ContextMenu is not ContextMenu menu) return;
+            FillNewSessionMenu(menu);
+            menu.Open(fresh);
+        };
         var more = Ui.Ghost("More", () => { }, "Copy, paste, settings, and the rest");
         var menu = new ContextMenu();
         menu.Items.Add(Item("Copy selection", CopySelection));
@@ -69,49 +76,41 @@ public sealed partial class MainWindow : Window
         menu.Items.Add(Item("Open folder", OpenPath));
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("Reopen finished session", RestartActive));
-        menu.Items.Add(Item("Rename tab", RenameActive));
-        menu.Items.Add(Item("Move tab left", () => MoveTab(-1)));
-        menu.Items.Add(Item("Move tab right", () => MoveTab(1)));
+        menu.Items.Add(Item("Rename session", RenameActive));
+        menu.Items.Add(Item("Move session up", () => MoveTab(-1)));
+        menu.Items.Add(Item("Move session down", () => MoveTab(1)));
         menu.Items.Add(new Separator());
-        menu.Items.Add(Item("Font and scrollback", ShowSettings));
-        menu.Items.Add(Item("Increase font", () => ChangeFont(1)));
-        menu.Items.Add(Item("Decrease font", () => ChangeFont(-1)));
-        menu.Items.Add(Item("Toggle smart RTL", () => { _smartRtl = !_smartRtl; Redraw(); Persist(); }));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("Keyboard shortcuts", ShowShortcuts));
-        menu.Items.Add(Item("About Satr", ShowAbout));
         more.ContextMenu = menu;
         more.Click += (_, _) => menu.Open(more);
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
-        actions.Children.Add(fresh);
-        actions.Children.Add(Ui.Ghost("Commands", ShowPalette, "Command palette — Ctrl+Shift+P"));
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        actions.Children.Add(Ui.Ghost("Search", OpenSearch, "Search output — Ctrl+Shift+F"));
         actions.Children.Add(more);
-        var tabScroll = new ScrollViewer
-        {
-            Content = _tabStrip,
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        var tabs = new DockPanel { Margin = new Thickness(8, 4, 8, 4), LastChildFill = true };
-        DockPanel.SetDock(actions, Dock.Right);
-        tabs.Children.Add(actions);
-        tabs.Children.Add(tabScroll);
+        var heading = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
+        heading.Children.Add(_sessionTitle);
+        heading.Children.Add(_sessionSubtitle);
+        var tabs = new DockPanel { Margin = new Thickness(20, 12), LastChildFill = true };
+        DockPanel.SetDock(actions, Dock.Right); tabs.Children.Add(actions);
+        var toggle = Ui.Ghost("☰", ToggleSidebar, "Toggle sidebar");
+        AutomationProperties.SetName(toggle, "Toggle sidebar");
+        toggle.Margin = new Thickness(0, 0, 12, 0);
+        DockPanel.SetDock(toggle, Dock.Left); tabs.Children.Add(toggle);
+        tabs.Children.Add(heading);
 
         var surface = new Grid { RowDefinitions = new RowDefinitions("*") };
         _terminal.HorizontalAlignment = HorizontalAlignment.Stretch;
         _terminal.VerticalAlignment = VerticalAlignment.Stretch;
         surface.Children.Add(_terminal);
         surface.Children.Add(BuildSearchBar());
+        surface.Children.Add(BuildWelcome());
         var host = new Border
         {
             Child = surface,
             Background = Ui.Terminal,
             BorderBrush = Ui.Border,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(0),
             ClipToBounds = true,
-            Margin = new Thickness(8, 0, 8, 0),
+            Padding = new Thickness(20, 12, 12, 0),
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch
         };
@@ -129,7 +128,7 @@ public sealed partial class MainWindow : Window
             Child = statusInner,
             BorderBrush = Ui.Border,
             BorderThickness = new Thickness(0, 1, 0, 0),
-            Padding = new Thickness(12, 6),
+            Padding = new Thickness(20, 10),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
         ToolTip.SetTip(statusBar, "Click to jump to latest output");
@@ -143,8 +142,13 @@ public sealed partial class MainWindow : Window
         root.Children.Add(tabs);
         Grid.SetRow(_workspace, 1); root.Children.Add(_workspace);
         Grid.SetRow(statusBar, 2); root.Children.Add(statusBar);
-        Content = root;
-        _tabStrip.SelectionChanged += (_, _) => { if (!_loading && _tabStrip.SelectedItem is TabItem { Tag: Tab tab }) Select(tab); };
+        _shell.ColumnDefinitions = new ColumnDefinitions("256,*");
+        _sidebar = BuildSidebar(fresh);
+        _shell.Children.Add(_sidebar);
+        Grid.SetColumn(root, 1); _shell.Children.Add(root);
+        Content = _shell;
+        SizeChanged += (_, _) => UpdateSidebarWidth();
+        _tabStrip.SelectionChanged += (_, _) => { if (!_loading && _tabStrip.SelectedItem is ListBoxItem { Tag: Tab tab }) Select(tab); };
         _render.Tick += (_, _) => Render();
         _errorClear.Tick += ClearError;
         _terminal.SizeChanged += (_, _) => ResizeTerminal();
@@ -186,27 +190,22 @@ public sealed partial class MainWindow : Window
     private ContextMenu BuildNewSessionMenu()
     {
         var menu = new ContextMenu();
-        foreach (var (label, profile, hint) in new[]
+        FillNewSessionMenu(menu);
+        return menu;
+    }
+    private void FillNewSessionMenu(ContextMenu menu)
+    {
+        menu.Items.Clear();
+        foreach (var def in ProfileCatalog.All)
         {
-            ("System shell", "Shell", "Fast shell, no AI"),
-            ("Codex — new", "Codex", "OpenAI agent"),
-            ("Codex — resume", "CodexResume", "Continue latest conversation"),
-            ("Claude Code", "Claude", "Anthropic agent"),
-            ("Agy — new", "Agy", "Multi-model agent"),
-            ("Agy — resume", "AgyResume", "Continue latest"),
-            ("Omp — new", "Omp", "Pi multi-model agent"),
-            ("Omp — resume", "OmpResume", "Continue previous session"),
-        })
-        {
-            var ready = profile == "Shell" || PtySession.FindExecutable(ToolFor(profile)) is not null;
-            var item = Item(label + " — " + hint + (ready ? "" : " (not on PATH)"), () => AddTab(profile));
-            item.IsEnabled = ready;
-            if (!ready) ToolTip.SetTip(item, ToolFor(profile) + " is not installed in PATH");
+            var presence = ProfileCatalog.Presence(def.Id, PtySession.FindExecutable);
+            var item = Item(ProfileCatalog.MenuCaption(def, presence), () => OfferSession(def.Id));
+            if (presence != ToolPresence.Installed)
+                ToolTip.SetTip(item, def.Executable + " is not on PATH. Open setup to check again.");
             menu.Items.Add(item);
         }
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("Open in another folder…", async () => await ChooseDirectory()));
-        return menu;
     }
     private void ShowPalette()
     {
@@ -214,16 +213,14 @@ public sealed partial class MainWindow : Window
         Ui.Paint(dialog);
         var query = new TextBox { PlaceholderText = "Type a command… session, search, copy, settings", MaxLength = 100 };
         var list = new ListBox { MaxHeight = 320 };
-        var commands = new (string Label, Action Run)[]
+        var commands = new List<(string Label, Action Run)>();
+        foreach (var def in ProfileCatalog.All)
         {
-            ("Session: system shell", () => AddTab("Shell")),
-            ("Session: new Codex", () => AddTab("Codex")),
-            ("Session: resume Codex", () => AddTab("CodexResume")),
-            ("Session: Claude Code", () => AddTab("Claude")),
-            ("Session: new Agy", () => AddTab("Agy")),
-            ("Session: resume Agy", () => AddTab("AgyResume")),
-            ("Session: new Omp", () => AddTab("Omp")),
-            ("Session: resume Omp", () => AddTab("OmpResume")),
+            var presence = ProfileCatalog.Presence(def.Id, PtySession.FindExecutable);
+            commands.Add((ProfileCatalog.PaletteCaption(def, presence), () => OfferSession(def.Id)));
+        }
+        commands.AddRange(
+        [
             ("New project folder", async () => await ChooseDirectory()),
             ("Jump to previous command — Ctrl+Shift+Up", () => JumpPrompt(-1)),
             ("Jump to next command — Ctrl+Shift+Down", () => JumpPrompt(1)),
@@ -234,16 +231,16 @@ public sealed partial class MainWindow : Window
             ("Paste image as path", PasteImage),
             ("Copy session path", CopyPath),
             ("Open session folder", OpenPath),
-            ("Reopen finished session", RestartActive),
-            ("Rename tab", RenameActive),
-            ("Duplicate tab", () => { if (_active is { } t) AddTab(t.Profile, t.Directory, "", t.Rtl); }),
-            ("Move tab left", () => MoveTab(-1)),
-            ("Move tab right", () => MoveTab(1)),
+            ("Start or reopen session", RestartActive),
+            ("Rename session", RenameActive),
+            ("Duplicate session", () => { if (_active is { } t) AddTab(t.Profile, t.Project, "", t.Rtl, project: t.Project); }),
+            ("Move session up", () => MoveTab(-1)),
+            ("Move session down", () => MoveTab(1)),
             ("Increase font", () => ChangeFont(1)),
             ("Decrease font", () => ChangeFont(-1)),
-            ("Font and scrollback settings", ShowSettings),
+            ("Settings", ShowSettings),
             ("Keyboard shortcuts", ShowShortcuts),
-        };
+        ]);
         void Refresh()
         {
             var q = query.Text?.Trim() ?? "";
@@ -324,7 +321,8 @@ public sealed partial class MainWindow : Window
         _loading = true;
         try
         {
-            var state = WorkspaceStore.LoadRecovering(WorkspaceStore.StatePath);
+            var read = WorkspaceStore.LoadRecovering(WorkspaceStore.StatePath);
+            var state = read.Workspace;
             _terminal.FontSize = double.IsFinite(state.FontSize) ? Math.Clamp(state.FontSize, 10, 32) : 16;
             _smartRtl = state.SmartRtl;
             if (!string.IsNullOrWhiteSpace(state.FontFamily) && state.FontFamily.Length <= 256 && IsMonospaceFont(state.FontFamily))
@@ -333,69 +331,103 @@ public sealed partial class MainWindow : Window
             RestoreWindow(state);
             MeasureFont();
             foreach (var tab in state.Tabs)
-                AddTab(ResumeOf(tab.Profile), tab.Directory, tab.Draft, tab.RightToLeft, tab.Title);
-            if (_tabs.Count > 0) _tabStrip.SelectedIndex = Math.Clamp(state.SelectedTab, 0, _tabs.Count - 1);
+                AddTab(ResumeOf(tab.Profile), tab.Directory, tab.Draft, tab.RightToLeft, tab.Title, tab.Project);
+            if (_tabs.Count > 0) _tabStrip.SelectedItem = _tabs[Math.Clamp(state.SelectedTab, 0, _tabs.Count - 1)].Header;
             _saveEnabled = true;
+            _restoredFromBackup = read.FromBackup;
         }
         catch (Exception ex) { StatusError("Restore failed. Auto-save is off to protect the original file. " + ex.Message); }
         finally { _loading = false; }
         if (_tabs.Count == 0) AddTab("Shell");
-        else if (_tabStrip.SelectedItem is TabItem { Tag: Tab tab }) Select(tab);
+        else if (_tabStrip.SelectedItem is ListBoxItem { Tag: Tab tab }) Select(tab);
+        if (_restoredFromBackup)
+            Status("Workspace recovered from a backup copy. Ctrl+Shift+R launches a tab.");
         MeasureFont(); _render.Start();
     }
 
-    private void AddTab(string profile, string? directory = null, string draft = "", bool rtl = true, string? title = null)
+    private void AddTab(string profile, string? directory = null, string draft = "", bool rtl = true, string? title = null, string? project = null)
     {
         if (_instanceLock is null) return;
         if (_tabs.Count >= 50) { StatusError("Maximum 50 tabs."); return; }
-        if (!IsAi(profile) && profile != "Shell") profile = "Shell";
-        if (IsAi(profile))
+        profile = ResolveProfile(profile, _loading);
+        var available = IsLaunchable(profile);
+        if (!ShouldCreateTab(profile, _loading, available))
         {
-            var tool = ToolFor(profile);
-            if (PtySession.FindExecutable(tool) is null)
-            {
-                StatusError($"{tool} is not found in PATH. Install it first, or open a plain shell.");
-                if (!_loading && _tabs.Count == 0) AddTab("Shell", directory, draft, rtl, title);
-                return;
-            }
+            StatusError($"{ToolFor(profile)} is not found in PATH. Install it first, or open a plain shell.");
+            if (!_loading && _tabs.Count == 0) AddTab("Shell", directory, draft, rtl, title, project);
+            return;
         }
-        var tab = new Tab(profile, directory ?? _directory, draft, rtl) { CustomTitle = title };
+        var cwd = directory ?? _directory;
+        var tab = new Tab(profile, cwd, draft, rtl)
+        {
+            CustomTitle = title,
+            Project = string.IsNullOrWhiteSpace(project) ? cwd : project,
+            AwaitingLaunch = _loading
+        };
+        if (tab.AwaitingLaunch)
+            tab.State = "Ready to start — Ctrl+Shift+R to launch.";
         tab.Buffer.SetMaximumScrollbackRows(_scrollbackRows);
-        var label = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        tab.Label = new TextBlock { FontSize = 13, MaxWidth = 240, TextTrimming = TextTrimming.CharacterEllipsis,
+        var label = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), HorizontalAlignment = HorizontalAlignment.Stretch };
+        tab.Label = new TextBlock { FontSize = 14, TextTrimming = TextTrimming.CharacterEllipsis,
             FlowDirection = FlowDirection.LeftToRight, VerticalAlignment = VerticalAlignment.Center, Foreground = Ui.Text };
         label.Children.Add(tab.Pip);
-        label.Children.Add(tab.Label);
+        var text = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
+        text.Children.Add(tab.Label);
+        tab.Detail = new TextBlock { FontSize = 11, Foreground = Ui.Muted, TextTrimming = TextTrimming.CharacterEllipsis };
+        text.Children.Add(tab.Detail);
+        Grid.SetColumn(text, 1); label.Children.Add(text);
+        tab.Pip.Margin = new Thickness(0, 0, 10, 0);
         var close = Button("×", () => CloseTab(tab), "Close tab — Ctrl+Shift+W");
         close.Padding = new Thickness(8, 2);
         close.Foreground = Ui.Muted;
         close.FontSize = 14;
-        AutomationProperties.SetName(close, "Close " + TabTitle(profile, tab.Directory));
-        label.Children.Add(close);
-        tab.Header = new TabItem { Header = label, Tag = tab };
+        AutomationProperties.SetName(close, "Close " + TabTitle(profile, tab.Project));
+        Grid.SetColumn(close, 2); label.Children.Add(close);
+        var row = new Border { Child = label, Padding = new Thickness(10, 7), CornerRadius = new CornerRadius(4) };
+        row.Classes.Add("session-row");
+        var projectLabel = new TextBlock { Text = ProjectName(tab.Project), FontSize = 12, FontWeight = FontWeight.SemiBold,
+            Foreground = Ui.Muted, TextTrimming = TextTrimming.CharacterEllipsis };
+        tab.ProjectHeading = new Border { Child = projectLabel, Padding = new Thickness(10, 18, 10, 7) };
+        ToolTip.SetTip(tab.ProjectHeading, tab.Project);
+        var entry = new StackPanel(); entry.Children.Add(tab.ProjectHeading); entry.Children.Add(row);
+        tab.Header = new ListBoxItem { Content = entry, Tag = tab };
         var tabMenu = new ContextMenu();
-        tabMenu.Items.Add(Item("Rename tab", () => RenameTab(tab)));
-        tabMenu.Items.Add(Item("Duplicate tab in same folder", () => AddTab(tab.Profile, tab.Directory, "", tab.Rtl)));
+        tabMenu.Items.Add(Item("Rename session", () => RenameTab(tab)));
+        tabMenu.Items.Add(Item("Duplicate session in same folder", () => AddTab(tab.Profile, tab.Project, "", tab.Rtl, project: tab.Project)));
         tabMenu.Items.Add(Item("Copy folder path", () => CopyDirectory(tab.Directory)));
         tabMenu.Items.Add(Item("Open folder", () => OpenDirectory(tab.Directory)));
-        tabMenu.Items.Add(Item("Reopen finished session", () => Restart(tab)));
+        tabMenu.Items.Add(Item("Start or reopen session", () => Restart(tab)));
         tabMenu.Items.Add(Item("Force-kill session", () => ForceKill(tab)));
         tab.Header.ContextMenu = tabMenu;
         UpdateTab(tab);
-        _tabs.Add(tab); _tabStrip.Items.Add(tab.Header);
+        _tabs.Add(tab);
+        RefreshProjectGroups();
+        RefreshChrome();
         if (!_loading) { _tabStrip.SelectedItem = tab.Header; Select(tab); Persist(); }
     }
 
-    internal static bool IsAi(string profile) => profile is "Codex" or "CodexResume" or "Claude" or "Agy" or "AgyResume" or "Omp" or "OmpResume";
-    internal static bool IsFreshAi(string profile) => profile is "Codex" or "Claude" or "Agy" or "Omp";
-    internal static string ToolFor(string profile) => profile == "Claude" ? "claude" : profile is "Agy" or "AgyResume" ? "agy" : profile is "Omp" or "OmpResume" ? "omp" : "codex";
-    internal static string ResumeOf(string profile) => profile switch { "Codex" => "CodexResume", "Agy" => "AgyResume", "Omp" => "OmpResume", _ => profile };
-    internal static string? FreshOf(string profile) => profile switch { "CodexResume" => "Codex", "AgyResume" => "Agy", "OmpResume" => "Omp", _ => null };
+    internal static bool IsAi(string profile) => ProfileCatalog.IsAgent(profile);
+    internal static bool IsFreshAi(string profile) => ProfileCatalog.IsFreshAgent(profile);
+    internal static string ToolFor(string profile) => ProfileCatalog.ToolName(profile);
+    internal static string ResumeOf(string profile) => ProfileCatalog.ResumeOf(profile);
+    internal static string? FreshOf(string profile) => ProfileCatalog.FreshOf(profile);
+    internal static string ResolveProfile(string profile, bool restoring) =>
+        restoring || ProfileCatalog.IsKnown(profile) ? profile : "Shell";
+    internal static bool IsLaunchable(string profile) =>
+        ProfileCatalog.IsLaunchable(profile, PtySession.FindExecutable);
+    internal static bool ShouldCreateTab(string profile, bool restoring, bool available) =>
+        restoring || available;
+    internal static bool ShouldAutoStart(string profile, bool available, bool restored = false) =>
+        !restored && available && (profile == "Shell" || IsAi(profile));
+    internal static string LaunchDirectory(string profile, string project, string directory) =>
+        IsAi(profile)
+            ? (System.IO.Directory.Exists(project) ? project : directory)
+            : (System.IO.Directory.Exists(directory) ? directory : project);
 
     internal static string TabTitle(string profile, string directory)
     {
         var folder = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
-        var name = profile switch { "Shell" => "Shell", "CodexResume" => "Codex · resume", "AgyResume" => "Agy · resume", "OmpResume" => "Omp · resume", _ => profile };
+        var name = ProfileCatalog.TabLabelOf(profile);
         return $"\u2068{(folder.Length == 0 ? directory : folder)}\u2069 · \u2068{name}\u2069";
     }
 
@@ -408,32 +440,40 @@ public sealed partial class MainWindow : Window
     private void Select(Tab tab)
     {
         if (ReferenceEquals(_active, tab)) return;
-        SaveActive(); _active = tab; _directory = tab.Directory;
-        _path.Text = tab.Directory; ToolTip.SetTip(_path, "Current session folder: " + tab.Directory + " — auto-updated when the shell supports OSC 7");
+        SaveActive(); _active = tab; _directory = tab.Project;
+        _path.Text = tab.Directory;
+        ToolTip.SetTip(_path, "Project: " + tab.Project + "\nSession folder: " + tab.Directory + " — OSC 7 updates the session folder only");
         _terminal.Clear(); tab.Dirty = true; Render();
         _terminal.SelectionState = tab.Selection;
         if (!tab.Follow) { _terminal.ScrollToVerticalOffset(tab.Offset); Status("Review mode — scroll/drag down or press Enter to return to live output."); }
         ResizeTerminal();
         if (!_searchPanel.IsVisible) _terminal.Focus();
-        if (tab.Session is null && !tab.Starting && !tab.Finished) Start(tab);
+        if (tab.Session is null && !tab.Starting && !tab.Finished &&
+            ShouldAutoStart(tab.Profile, IsLaunchable(tab.Profile), tab.AwaitingLaunch))
+            Start(tab);
         UpdateTab(tab);
         Persist();
     }
 
     private async void Start(Tab tab)
     {
+        tab.AwaitingLaunch = false;
         tab.Starting = true; tab.State = "Starting…"; UpdateTab(tab);
         if (ReferenceEquals(_active, tab)) Status("Starting session…");
         try
         {
-            var session = await PtySession.Start(tab.Profile, tab.Directory, tab.Columns, tab.Rows, _shutdown.Token);
+            var session = await PtySession.Start(tab.Profile, LaunchDirectory(tab.Profile, tab.Project, tab.Directory), tab.Columns, tab.Rows, _shutdown.Token);
             if (_closed || _closing || tab.Closed) { await session.DisposeAsync(); return; }
             tab.Session = session;
+            session.Warning += message => Dispatcher.UIThread.Post(() =>
+            {
+                if (tab.Session == session && !tab.Closed && !_closed) StatusError(message);
+            });
             session.Output += text =>
             {
                 TerminalSnapshot snapshot;
                 lock (tab) { snapshot = tab.Buffer.Process(text); tab.Snapshot = snapshot; tab.Dirty = true; }
-                foreach (var response in snapshot.Responses) session.Write(response);
+                if (snapshot.Responses.Count > 0) session.WriteResponses(snapshot.Responses);
             };
             session.Ended += message => Dispatcher.UIThread.Post(() =>
             {
@@ -447,19 +487,19 @@ public sealed partial class MainWindow : Window
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { tab.Finished = true; tab.State = "Failed to start: " + ex.Message; UpdateTab(tab); if (ReferenceEquals(_active, tab)) StatusError(tab.State); }
-        finally { tab.Starting = false; }
+        finally { tab.Starting = false; UpdateTab(tab); }
     }
 
     private bool Persist()
     {
         if (_loading) return true;
         SaveActive();
-        if (!_saveEnabled) return true; // The original workspace remains untouched when recovery failed.
+        if (!_saveEnabled) return false;
         try
         {
             WorkspaceStore.Save(WorkspaceStore.StatePath, new SavedWorkspace(_tabs.Select(tab =>
-                new SavedTab(tab.Profile, tab.Directory, tab.Draft, tab.Rtl, tab.CustomTitle)).ToArray(), Math.Max(0, _tabs.IndexOf(_active!)), _terminal.FontSize, _smartRtl,
-                _terminal.FontFamily.Name, _normalWidth, _normalHeight, _normalPosition?.X, _normalPosition?.Y, WindowState == WindowState.Maximized, _scrollbackRows));
+                new SavedTab(tab.Profile, tab.Directory, tab.Draft, tab.Rtl, tab.CustomTitle, tab.Project)).ToArray(), Math.Max(0, _tabs.IndexOf(_active!)), _terminal.FontSize, _smartRtl,
+                _terminal.FontFamily.Name, _normalWidth, _normalHeight, _normalPosition?.X, _normalPosition?.Y, WindowState == WindowState.Maximized, _scrollbackRows, WorkspaceStore.CurrentSchema));
             return true;
         }
         catch (Exception ex) { StatusError("Could not save sessions; check disk space and data-folder permissions. " + ex.Message); return false; }
@@ -482,13 +522,14 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex) { StatusError("Tab not closed: draft archiving failed: " + ex.Message); return; }
         tab.Closed = true;
-        _loading = true; _tabs.Remove(tab); _tabStrip.Items.Remove(tab.Header); _loading = false;
+        _tabs.Remove(tab); RefreshProjectGroups();
         if (ReferenceEquals(_active, tab))
         {
             _active = null;
             if (_tabs.Count > 0) { _tabStrip.SelectedItem = _tabs[0].Header; Select(_tabs[0]); }
             else { _terminal.Clear(); _path.Text = ""; Status("Open a new shell to start."); }
         }
+        RefreshChrome();
         Persist();
         if (tab.Session is { } session) { try { await session.DisposeAsync(); } catch (Exception ex) { StatusError(ex.Message); } }
     }
@@ -498,7 +539,12 @@ public sealed partial class MainWindow : Window
         if (tab.Session is null || tab.Finished) { Restart(tab); return; }
         if (!await Confirm("Force-kill the session? Unsaved screen output is lost.", "Kill")) return;
         var s = tab.Session; tab.Session = null;
-        try { await s.DisposeAsync(); } catch (Exception ex) { StatusError(ex.Message); }
+        try { await s.DisposeAsync(); }
+        catch (Exception ex)
+        {
+            tab.Session = s; tab.Finished = true; tab.State = "Close failed: " + ex.Message;
+            UpdateTab(tab); StatusError(tab.State); return;
+        }
         tab.Finished = true; tab.State = "Killed — Ctrl+Shift+R to reopen."; UpdateTab(tab);
         if (ReferenceEquals(_active, tab)) StatusError(tab.State);
     }
@@ -523,6 +569,7 @@ public sealed partial class MainWindow : Window
     {
         if (_closed) return;
         e.Cancel = true; if (_closing) return;
+        RefreshDirectory();
         if (!Persist())
         {
             if (!await Confirm("Could not save sessions. Close without saving? Recent tab order is lost.", "Close without saving")) return;
@@ -533,8 +580,15 @@ public sealed partial class MainWindow : Window
         }
         _closing = true; _shutdown.Cancel(); _render.Stop(); _directoryTimer.Stop();
         try { await Task.WhenAll(_tabs.Where(tab => tab.Session is not null).Select(tab => tab.Session!.DisposeAsync().AsTask())); }
-        catch (Exception ex) { StatusError(ex.Message); }
-        finally { _instanceLock?.Dispose(); _closed = true; Close(); }
+        catch (Exception ex)
+        {
+            StatusError("Session cleanup failed: " + ex.Message);
+            if (!await Confirm("A session did not finish closing. Close the window anyway? Its process may still be running.", "Close window"))
+            {
+                _closing = false; _render.Start(); return;
+            }
+        }
+        _instanceLock?.Dispose(); _closed = true; Close();
     }
 
     private void Render()
@@ -569,11 +623,14 @@ public sealed partial class MainWindow : Window
         if (_active is not { } tab || _terminal.ViewportWidth <= 0 || _terminal.ViewportHeight <= 0) return;
         var columns = Math.Max(10, (int)(_terminal.ViewportWidth / _cellWidth));
         var rows = Math.Max(5, (int)(_terminal.ViewportHeight / _lineHeight));
+        tab.Buffer.SetCellMetrics(_cellWidth, _lineHeight);
         if (tab.Columns == columns && tab.Rows == rows) return;
         tab.Columns = columns; tab.Rows = rows;
-        // Preserve selection across restores; the view clears it only when mapping fails.
-        tab.Selection = _terminal.SelectionState;
+        var before = tab.Snapshot ?? tab.Buffer.CaptureSnapshot();
+        var selection = _terminal.SelectionState;
         lock (tab) { tab.Snapshot = tab.Buffer.Resize(columns, rows); tab.Dirty = true; }
+        tab.Selection = TerminalBuffer.RemapSelection(before, selection.Anchor, selection.End, tab.Snapshot);
+        _terminal.SelectionState = tab.Selection;
         try { tab.Session?.Resize(columns, rows); } catch (Exception ex) { StatusError(ex.Message); }
     }
     private async Task ChooseDirectory()
@@ -583,10 +640,53 @@ public sealed partial class MainWindow : Window
             var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Project folder", AllowMultiple = false });
             if (folders.FirstOrDefault()?.TryGetLocalPath() is not { } directory) return;
             _directory = directory;
-            var profile = await ChooseProfile();
-            AddTab(profile ?? "Shell");
+            OfferSession(await ChooseProfile() ?? "Shell");
         }
         catch (Exception ex) { StatusError(ex.Message); }
+    }
+    private void OfferSession(string profile)
+    {
+        if (IsLaunchable(profile) || ProfileCatalog.Find(profile) is null)
+        {
+            AddTab(profile);
+            return;
+        }
+        ShowSetup(profile);
+    }
+    private async void ShowSetup(string profile)
+    {
+        if (ProfileCatalog.Find(profile) is not { } def) return;
+        var dialog = new Window
+        {
+            Title = "Setup — " + def.DisplayName,
+            Width = 460,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false
+        };
+        Ui.Paint(dialog);
+        var note = new TextBlock { Text = def.SetupHint, TextWrapping = TextWrapping.Wrap };
+        var state = new TextBlock { Foreground = Ui.Muted, TextWrapping = TextWrapping.Wrap };
+        void RefreshState()
+        {
+            state.Text = IsLaunchable(profile)
+                ? def.Executable + " is on PATH."
+                : def.Executable + " is not on this process's PATH. If installation changed PATH, reopen Satr and check again.";
+        }
+        RefreshState();
+        var panel = new StackPanel { Margin = new Thickness(20), Spacing = 12 };
+        panel.Children.Add(note);
+        panel.Children.Add(state);
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
+        row.Children.Add(Button("Close", () => dialog.Close()));
+        row.Children.Add(Button("Check again", () =>
+        {
+            if (IsLaunchable(profile)) { dialog.Close(); AddTab(profile); }
+            else RefreshState();
+        }));
+        panel.Children.Add(row);
+        dialog.Content = panel;
+        await dialog.ShowDialog(this);
     }
     private static async Task<string?> ChooseProfile()
     {
@@ -595,8 +695,13 @@ public sealed partial class MainWindow : Window
         string? picked = null;
         var panel = new StackPanel { Margin = new Thickness(20), Spacing = 10 };
         panel.Children.Add(new TextBlock { Text = "Open in the chosen folder:" });
-        foreach (var (label, profile) in new[] { ("Shell terminal", "Shell"), ("Codex", "Codex"), ("Claude Code", "Claude"), ("Agy", "Agy"), ("Omp", "Omp") })
-            panel.Children.Add(Button(label, () => { picked = profile; dialog.Close(); }));
+        foreach (var def in ProfileCatalog.All)
+        {
+            if (def.FreshId is not null) continue;
+            var presence = ProfileCatalog.Presence(def.Id, PtySession.FindExecutable);
+            var label = presence == ToolPresence.Installed ? def.PickerLabel : def.PickerLabel + " — Available (setup)";
+            panel.Children.Add(Button(label, () => { picked = def.Id; dialog.Close(); }));
+        }
         panel.Children.Add(Button("Cancel", () => dialog.Close()));
         dialog.Content = panel;
         var owner = (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.MainWindow;
@@ -691,27 +796,13 @@ public sealed partial class MainWindow : Window
         Ui.Paint(window);
         window.Show(this);
     }
-    private void ShowShortcuts()
-    {
-        var window = new Window { Title = "Satr shortcuts", Width = 520, SizeToContent = SizeToContent.Height,
-            Content = new TextBlock { Margin = new Thickness(24), TextWrapping = TextWrapping.Wrap,
-                Text = "Terminal: Ctrl+Shift+C copy • Ctrl+V paste • Ctrl+Shift+A select all • Ctrl+plus/minus font size\nTabs: Ctrl+Shift+T new • Ctrl+Shift+P command palette • Ctrl+Tab next • Ctrl+1..8 jump • Ctrl+Shift+W close • Ctrl+Shift+R reopen • Ctrl+Shift+PageUp/Down move\nSearch: Ctrl+Shift+F then Enter next • Shift+Enter previous • Esc close\nCommands: Ctrl+Shift+Up/Down previous/next prompt (OSC 133)\nMouse: Shift+drag selects while captured • Ctrl+Click opens links (OSC 8 or URL text)" } };
-        Ui.Paint(window);
-        window.Show(this);
-    }
-    private void ShowAbout()
-    {
-        var window = new Window { Title = "About Satr", Width = 500, Height = 300,
-            Content = new TextBlock { Margin = new Thickness(24), TextWrapping = TextWrapping.Wrap,
-                Text = "Satr 0.3.0\nMohamad Salah\n\nAvalonia UI with Windows / Linux sessions.\nTerminal engine derived from RtlTerminal under MIT; see licenses.\n\nAI-tool compatibility varies by tool and version." } };
-        Ui.Paint(window);
-        window.Show(this);
-    }
+    private void ShowShortcuts() => OpenSettings(3);
+    private void ShowAbout() => OpenSettings(4);
 
     private void GlobalKey(object? sender, KeyEventArgs e)
     {
         if (_searchPanel.IsVisible && e.Key == Key.Escape) { CloseSearch(); e.Handled = true; return; }
-        if (e.Key == Key.F3) { FindText(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1); e.Handled = true; return; }
+        if (_searchPanel.IsVisible && e.Key == Key.F3) { FindText(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1); e.Handled = true; return; }
         if ((e.KeyModifiers & KeyModifiers.Control) == 0) return;
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         if (shift && e.Key == Key.P) { ShowPalette(); e.Handled = true; }
@@ -748,7 +839,11 @@ public sealed partial class MainWindow : Window
         var sequence = KeySequence(e.Key, e.KeyModifiers, _active?.Snapshot?.Modes.ApplicationCursorKeys == true);
         if (sequence is null && !control && e.KeyModifiers.HasFlag(KeyModifiers.Alt) && !string.IsNullOrEmpty(e.KeySymbol))
             sequence = "\x1b" + e.KeySymbol;
-        if (sequence is not null) { Send(sequence); e.Handled = true; }
+        if (sequence is not null)
+        {
+            if (ImeComposition.BlocksPtyKey(_terminal.IsComposing, control)) return;
+            Send(sequence); e.Handled = true;
+        }
     }
     internal static string? KeySequence(Key key, KeyModifiers modifiers, bool application)
     {

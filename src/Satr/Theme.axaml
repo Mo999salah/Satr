@@ -1,0 +1,76 @@
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Styles.Resources>
+    <SolidColorBrush x:Key="SystemControlBackgroundChromeMediumLowBrush" Color="#242424" />
+    <SolidColorBrush x:Key="SystemControlBackgroundChromeLowBrush" Color="#191919" />
+    <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#A3D9B1" />
+  </Styles.Resources>
+  <Style Selector="Button">
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="MinHeight" Value="36" />
+  </Style>
+  <Style Selector="Button:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#333333" />
+    <Setter Property="Foreground" Value="#FFFFFF" />
+  </Style>
+  <Style Selector="Button:pressed /template/ ContentPresenter">
+    <Setter Property="Background" Value="#414141" />
+  </Style>
+  <Style Selector="TextBox">
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Background" Value="#242424" />
+    <Setter Property="BorderBrush" Value="#414141" />
+    <Setter Property="Padding" Value="12,10" />
+  </Style>
+  <Style Selector="ComboBox">
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="MinHeight" Value="38" />
+    <Setter Property="Background" Value="#242424" />
+  </Style>
+  <Style Selector="NumericUpDown">
+    <Setter Property="MinHeight" Value="38" />
+  </Style>
+  <Style Selector="ListBoxItem">
+    <Setter Property="MinHeight" Value="42" />
+    <Setter Property="Padding" Value="10,6" />
+    <Setter Property="Margin" Value="0,2" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+  </Style>
+  <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+    <Setter Property="Background" Value="#303030" />
+    <Setter Property="BorderBrush" Value="#555555" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Foreground" Value="#FFFFFF" />
+  </Style>
+  <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="#292929" />
+  </Style>
+  <Style Selector="ContextMenu">
+    <Setter Property="Background" Value="#242424" />
+    <Setter Property="Padding" Value="6" />
+    <Setter Property="CornerRadius" Value="10" />
+  </Style>
+  <Style Selector="MenuItem">
+    <Setter Property="MinHeight" Value="34" />
+    <Setter Property="FontSize" Value="14" />
+  </Style>
+  <Style Selector="ListBox.sessions > ListBoxItem">
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="Margin" Value="0" />
+  </Style>
+  <Style Selector="ListBox.sessions > ListBoxItem:selected /template/ ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+  </Style>
+  <Style Selector="ListBox.sessions > ListBoxItem:pointerover /template/ ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="ListBox.sessions > ListBoxItem:pointerover Border.session-row">
+    <Setter Property="Background" Value="#242424" />
+  </Style>
+  <Style Selector="ListBox.sessions > ListBoxItem:selected Border.session-row">
+    <Setter Property="Background" Value="#262D29" />
+    <Setter Property="BorderBrush" Value="#A3D9B1" />
+    <Setter Property="BorderThickness" Value="2,0,0,0" />
+  </Style>
+</Styles>

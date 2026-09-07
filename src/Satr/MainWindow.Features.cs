@@ -40,14 +40,14 @@ public sealed partial class MainWindow
         AutomationProperties.SetName(_search, "Search terminal output");
         _searchResult.Foreground = Ui.Muted;
         _searchResult.FontSize = 12;
-        var bar = new DockPanel { LastChildFill = true };
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        var bar = new StackPanel { Spacing = 8 };
+        var actions = new WrapPanel { Orientation = Orientation.Horizontal };
         actions.Children.Add(_searchResult);
         actions.Children.Add(_matchCase);
         actions.Children.Add(Button("Previous", () => FindText(-1)));
         actions.Children.Add(Button("Next", () => FindText(1)));
         actions.Children.Add(Button("Close", CloseSearch));
-        DockPanel.SetDock(actions, Dock.Right); bar.Children.Add(actions); bar.Children.Add(_search);
+        bar.Children.Add(_search); bar.Children.Add(actions);
         _searchDebounce.Tick += (_, _) => { _searchDebounce.Stop(); _terminal.ResetSearch(); FindText(1); };
         _search.TextChanged += (_, _) => { _searchDebounce.Stop(); _searchDebounce.Start(); };
         _matchCase.IsCheckedChanged += (_, _) => { _terminal.ResetSearch(); FindText(1); };
@@ -95,18 +95,21 @@ public sealed partial class MainWindow
     private void UpdateTab(Tab tab)
     {
         if (tab.Closed || _closed) return;
-        var name = string.IsNullOrWhiteSpace(tab.CustomTitle) ? TabTitle(tab.Profile, tab.Directory) : $"\u2068{tab.CustomTitle}\u2069";
-        tab.Pip.Background = tab.Finished ? Ui.Danger : tab.Starting ? Ui.Warning : Ui.Accent;
-        tab.Label.Text = name + (tab.Finished ? " — ended" : tab.Starting ? " — starting…" : "");
-        ToolTip.SetTip(tab.Header, tab.Directory + "\n" + tab.State + "\nRight-click: rename, folder, kill");
+        var name = string.IsNullOrWhiteSpace(tab.CustomTitle) ? TabTitle(tab.Profile, tab.Project) : $"\u2068{tab.CustomTitle}\u2069";
+        tab.Pip.Background = tab.Finished ? Ui.Danger : tab.Starting ? Ui.Warning : tab.AwaitingLaunch ? Ui.Muted : Ui.Accent;
+        tab.Label.Text = string.IsNullOrWhiteSpace(tab.CustomTitle) ? ProfileCatalog.TabLabelOf(tab.Profile) : name;
+        tab.Detail.Text = ProfileCatalog.TabLabelOf(tab.Profile) + " · " + (tab.Finished ? "Ended" : tab.Starting ? "Starting" : tab.AwaitingLaunch ? "Ready" : "Running");
+        AutomationProperties.SetName(tab.Header, name + ", " + tab.State);
+        ToolTip.SetTip(tab.Header, tab.Project + "\n" + tab.Directory + "\n" + tab.State + "\nRight-click: rename, folder, kill");
         if (ReferenceEquals(_active, tab)) Status(tab.State + " • " + tab.Profile);
+        RefreshChrome();
     }
 
     private void RenameActive() { if (_active is { } tab) RenameTab(tab); }
     private async void RenameTab(Tab tab)
     {
-        var name = new TextBox { Text = tab.CustomTitle ?? "", PlaceholderText = "Tab name; leave empty for automatic", MaxLength = 100 };
-        var dialog = new Window { Title = "Rename tab", Width = 420, SizeToContent = SizeToContent.Height,
+        var name = new TextBox { Text = tab.CustomTitle ?? "", PlaceholderText = "Session name; leave empty for automatic", MaxLength = 100 };
+        var dialog = new Window { Title = "Rename session", Width = 420, SizeToContent = SizeToContent.Height,
             WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
         Ui.Paint(dialog);
         var panel = new StackPanel { Margin = new Thickness(20), Spacing = 12 };
@@ -126,22 +129,21 @@ public sealed partial class MainWindow
     private void MoveTab(int delta)
     {
         if (_active is not { } tab) return;
-        var oldIndex = _tabs.IndexOf(tab); var index = oldIndex + delta;
-        if (index < 0 || index >= _tabs.Count) return;
-        _loading = true;
-        try
-        {
-            _tabs.RemoveAt(oldIndex); _tabs.Insert(index, tab);
-            _tabStrip.Items.Remove(tab.Header); _tabStrip.Items.Insert(index, tab.Header);
-            _tabStrip.SelectedItem = tab.Header;
-        }
-        finally { _loading = false; }
+        var siblings = _tabs.Where(t => ProjectComparer.Equals(t.Project, tab.Project)).ToList();
+        var position = siblings.IndexOf(tab) + delta;
+        if (position < 0 || position >= siblings.Count) return;
+        var oldIndex = _tabs.IndexOf(tab);
+        var index = _tabs.IndexOf(siblings[position]);
+        (_tabs[oldIndex], _tabs[index]) = (_tabs[index], _tabs[oldIndex]);
+        RefreshProjectGroups();
         tab.Header.BringIntoView(); Persist();
     }
     private void RestartActive() { if (_active is { } tab) Restart(tab); }
     private async void Restart(Tab tab)
     {
         if (tab.Starting || tab.Closed) return;
+        if (!ProfileCatalog.IsKnown(tab.Profile)) { StatusError("Unsupported profile: " + tab.Profile + ". Saved metadata is retained."); return; }
+        if (!IsLaunchable(tab.Profile)) { ShowSetup(tab.Profile); return; }
         if (tab.Session is not null && !tab.Finished) { Status("Session still running. Force-kill it from the tab menu."); return; }
         if (tab.Buffer.CaptureSnapshot() is { Lines.Count: > 5 } && !await Confirm("Reopening clears the current screen history. Continue?", "Reopen")) return;
         tab.Starting = true;
@@ -160,39 +162,6 @@ public sealed partial class MainWindow
             tab.Starting = false; Start(tab);
         }
         catch (Exception ex) { tab.Starting = false; tab.Finished = true; tab.State = ex.Message; UpdateTab(tab); }
-    }
-
-    private async void ShowSettings()
-    {
-        var mono = FontManager.Current.SystemFonts.Select(font => font.Name).Where(IsMonospaceFont).Distinct().Order().ToArray();
-        var fonts = mono.Length > 0 ? mono : FontManager.Current.SystemFonts.Select(f => f.Name).Distinct().Order().ToArray();
-        var family = new ComboBox { ItemsSource = fonts,
-            SelectedItem = fonts.Contains(_terminal.FontFamily.Name) ? _terminal.FontFamily.Name : fonts.FirstOrDefault(), HorizontalAlignment = HorizontalAlignment.Stretch, MinWidth = 260 };
-        var size = new NumericUpDown { Minimum = 10, Maximum = 32, Value = (decimal)_terminal.FontSize, Increment = 1 };
-        var history = new ComboBox { ItemsSource = new[] { 2000, 5000, 10000 }, SelectedItem = _scrollbackRows };
-        var preview = new TextBlock { Text = "Satr — hello مرحبا 123\nCodex /home/project — Arabic shaping in an LTR grid", TextWrapping = TextWrapping.Wrap, FontFamily = _terminal.FontFamily, FontSize = _terminal.FontSize };
-        var panel = new StackPanel { Margin = new Thickness(20), Spacing = 12 };
-        if (mono.Length == 0) panel.Children.Add(new TextBlock { Text = "No exact monospace font found; showing all fonts.", Foreground = Ui.Warning });
-        panel.Children.Add(new TextBlock { Text = "Terminal font — monospace preferred" }); panel.Children.Add(family);
-        panel.Children.Add(new TextBlock { Text = "Font size" }); panel.Children.Add(size);
-        panel.Children.Add(new TextBlock { Text = "Scrollback lines kept in memory" }); panel.Children.Add(history);
-        panel.Children.Add(preview);
-        void Preview() { if (family.SelectedItem is string name) preview.FontFamily = new FontFamily(name); preview.FontSize = (double)(size.Value ?? 16); }
-        family.SelectionChanged += (_, _) => Preview(); size.ValueChanged += (_, _) => Preview();
-        var dialog = new Window { Title = "Terminal settings", Width = 460, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-        Ui.Paint(dialog);
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
-        buttons.Children.Add(Button("Cancel", () => dialog.Close()));
-        buttons.Children.Add(Button("Apply", () =>
-        {
-            if (family.SelectedItem is string name) _terminal.FontFamily = new FontFamily(name);
-            _terminal.FontSize = Math.Clamp((double)(size.Value ?? 16), 10, 32);
-            _scrollbackRows = history.SelectedItem is int rows ? rows : 5000;
-            foreach (var tab in _tabs) lock (tab) { tab.Snapshot = tab.Buffer.SetMaximumScrollbackRows(_scrollbackRows); tab.Dirty = true; }
-            _terminal.ClearSelection(); MeasureFont(); Persist(); dialog.Close();
-        }));
-        panel.Children.Add(buttons);
-        dialog.Content = panel; await dialog.ShowDialog(this);
     }
 
     private void RememberWindow()
@@ -214,18 +183,30 @@ public sealed partial class MainWindow
     }
     private void RefreshDirectory()
     {
-        if (_active is not { Session: { } } tab || tab.Finished) return;
-        var reported = tab.Snapshot?.WorkingDirectory;
-        if (string.IsNullOrEmpty(reported) || !Path.IsPathFullyQualified(reported) || !System.IO.Directory.Exists(reported)) return;
-        if (tab.Directory == reported) return;
-        tab.Directory = reported; _directory = reported; _path.Text = reported;
-        ToolTip.SetTip(_path, "Current session folder: " + reported); UpdateTab(tab); Persist();
+        var changed = false;
+        foreach (var tab in _tabs)
+        {
+            if (tab.Session is null || tab.Finished || tab.Closed) continue;
+            var reported = tab.Snapshot?.WorkingDirectory;
+            if (string.IsNullOrEmpty(reported) || !Path.IsPathFullyQualified(reported) || !System.IO.Directory.Exists(reported))
+                continue;
+            if (tab.Directory == reported) continue;
+            tab.Directory = reported;
+            changed = true;
+            if (ReferenceEquals(_active, tab))
+            {
+                _path.Text = reported;
+                ToolTip.SetTip(_path, "Project: " + tab.Project + "\nSession folder: " + reported + " — OSC 7 updates the session folder only");
+            }
+            UpdateTab(tab);
+        }
+        if (changed) Persist();
     }
 
     private async void PasteImage()
     {
         var tab = _active;
-        if (tab is null || tab.Profile == "Shell" || tab.Finished || tab.Session is null)
+        if (tab is null || !IsAi(tab.Profile) || tab.Finished || tab.Session is null)
         { StatusError("Image pasting works only in AI sessions (Codex, Claude, Agy, Omp). Open one first."); return; }
         try
         {

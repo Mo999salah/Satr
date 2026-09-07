@@ -24,10 +24,13 @@ public sealed class App : Application
     public override void Initialize()
     {
         RequestedThemeVariant = ThemeVariant.Dark;
-        Styles.Add(new FluentTheme());
+        var theme = new FluentTheme();
+        theme.Palettes[ThemeVariant.Dark] = new ColorPaletteResources { Accent = Ui.AccentColor };
+        Styles.Add(theme);
+        Styles.Add(new Avalonia.Markup.Xaml.Styling.StyleInclude(new Uri("avares://Satr/")) { Source = new Uri("avares://Satr/Theme.axaml") });
         Resources["SystemAccentColor"] = Ui.AccentColor;
-        Resources["SystemAccentColorDark1"] = Color.Parse("#16A34A");
-        Resources["SystemAccentColorLight1"] = Color.Parse("#4ADE80");
+        Resources["SystemAccentColorDark1"] = Color.Parse("#76B98A");
+        Resources["SystemAccentColorLight1"] = Color.Parse("#C4E8CD");
     }
 
     public override void OnFrameworkInitializationCompleted()
