@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 
 namespace Satr;
@@ -57,7 +58,9 @@ public sealed record TerminalSnapshot(
 
 public sealed class TerminalBuffer
 {
+    public const string ProductVersion = "0.3.0";
     private const int DefaultMaximumScrollbackRows = 2000;
+    private const int MaximumClusterCharacters = 256;
     private static readonly TerminalColor[] AnsiColors =
     [
         new(12, 12, 12),
@@ -110,9 +113,10 @@ public sealed class TerminalBuffer
     private int _mouseTrackingMode;
     private bool _sgrMouse;
     private bool _synchronizedOutput;
-    private bool _joinNextCharacter;
-    private bool _regionalIndicatorPending;
+    private bool _canExtendCluster;
+    private double _cellWidth = 9, _cellHeight = 18;
     private char? _pendingHighSurrogate;
+    private string _pendingPrefix = "";
     private ParserState _state;
     private TerminalStyle _currentStyle;
     private SavedScreen? _savedMainScreen;
@@ -198,8 +202,101 @@ public sealed class TerminalBuffer
             return CreateSnapshot();
     }
 
+    public void SetCellMetrics(double width, double height)
+    {
+        if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(width));
+        lock (_syncRoot) { _cellWidth = width; _cellHeight = height; }
+    }
+
+    public static ((int Row, int Offset)? Anchor, (int Row, int Offset)? End) RemapSelection(
+        TerminalSnapshot before,
+        (int Row, int Offset)? anchor,
+        (int Row, int Offset)? end,
+        TerminalSnapshot after)
+    {
+        if (anchor is null || end is null)
+            return (null, null);
+
+        var beforeText = LogicalText(before);
+        var afterText = LogicalText(after);
+        if (beforeText != afterText)
+            return (null, null);
+
+        return (
+            FromLogicalOffset(after, ToLogicalOffset(before, anchor.Value)),
+            FromLogicalOffset(after, ToLogicalOffset(before, end.Value)));
+    }
+
+    public static string LogicalText(TerminalSnapshot snapshot)
+    {
+        var text = new StringBuilder();
+        for (var row = 0; row < snapshot.Lines.Count; row++)
+        {
+            if (row > 0 && !snapshot.Lines[row].WrappedFromPrevious)
+                text.Append('\n');
+            foreach (var run in snapshot.Lines[row].Runs)
+                text.Append(run.Text);
+        }
+
+        return text.ToString();
+    }
+
+    public static int ToLogicalOffset(TerminalSnapshot snapshot, (int Row, int Offset) point)
+    {
+        var offset = 0;
+        for (var row = 0; row < snapshot.Lines.Count && row < point.Row; row++)
+        {
+            offset += LineText(snapshot.Lines[row]).Length;
+            if (row + 1 < snapshot.Lines.Count && !snapshot.Lines[row + 1].WrappedFromPrevious)
+                offset++;
+        }
+
+        if (point.Row >= 0 && point.Row < snapshot.Lines.Count)
+            offset += Math.Clamp(point.Offset, 0, LineText(snapshot.Lines[point.Row]).Length);
+
+        return offset;
+    }
+
+    public static (int Row, int Offset) FromLogicalOffset(TerminalSnapshot snapshot, int logical)
+    {
+        logical = Math.Max(0, logical);
+        var offset = 0;
+        for (var row = 0; row < snapshot.Lines.Count; row++)
+        {
+            var text = LineText(snapshot.Lines[row]);
+            var newline = row + 1 < snapshot.Lines.Count &&
+                !snapshot.Lines[row + 1].WrappedFromPrevious ? 1 : 0;
+            if (logical <= offset + text.Length)
+                return (row, logical - offset);
+            offset += text.Length + newline;
+        }
+
+        if (snapshot.Lines.Count == 0)
+            return (0, 0);
+
+        var last = snapshot.Lines[^1];
+        return (snapshot.Lines.Count - 1, LineText(last).Length);
+    }
+
+    private static string LineText(TerminalLine line) =>
+        string.Concat(line.Runs.Select(run => run.Text));
+
     private void ProcessCharacter(char character)
     {
+        if (character == '\x1b' && _state is ParserState.Csi or ParserState.Escape or ParserState.IgnoreNext)
+        {
+            CancelParser();
+            _state = ParserState.Escape;
+            return;
+        }
+        if (character is '\x18' or '\x1a')
+        {
+            if (_state != ParserState.Normal)
+                CancelParser();
+            return;
+        }
+
         if (_state == ParserState.Normal && _pendingHighSurrogate is { } highSurrogate)
         {
             _pendingHighSurrogate = null;
@@ -240,13 +337,8 @@ public sealed class TerminalBuffer
                 }
                 else
                 {
-                    if (_osc.Length < 4096)
-                    {
-                        _osc.Append('\x1b');
-                        _osc.Append(character);
-                    }
-
-                    _state = ParserState.Osc;
+                    CancelParser();
+                    ProcessEscape(character);
                 }
                 return;
             case ParserState.Dcs:
@@ -263,13 +355,8 @@ public sealed class TerminalBuffer
                 }
                 else
                 {
-                    if (_dcs.Length < 4096)
-                    {
-                        _dcs.Append('\x1b');
-                        _dcs.Append(character);
-                    }
-
-                    _state = ParserState.Dcs;
+                    CancelParser();
+                    ProcessEscape(character);
                 }
                 return;
             case ParserState.ControlString:
@@ -277,9 +364,8 @@ public sealed class TerminalBuffer
                     _state = ParserState.ControlStringEscape;
                 return;
             case ParserState.ControlStringEscape:
-                _state = character == '\\'
-                    ? ParserState.Normal
-                    : ParserState.ControlString;
+                CancelParser();
+                if (character != '\\') ProcessEscape(character);
                 return;
             case ParserState.IgnoreNext:
                 _state = ParserState.Normal;
@@ -289,26 +375,25 @@ public sealed class TerminalBuffer
         switch (character)
         {
             case '\x1b':
-                ResetClusterState();
                 _state = ParserState.Escape;
                 break;
             case '\r':
-                ResetClusterState();
+                EndGraphemeContext();
                 _cursorColumn = 0;
                 _wrapPending = false;
                 break;
             case '\n':
-                ResetClusterState();
+                EndGraphemeContext();
                 _wrapPending = false;
                 LineFeed(wrapped: false);
                 break;
             case '\b':
-                ResetClusterState();
+                EndGraphemeContext();
                 _wrapPending = false;
                 _cursorColumn = Math.Max(0, _cursorColumn - 1);
                 break;
             case '\t':
-                ResetClusterState();
+                EndGraphemeContext();
                 _wrapPending = false;
                 _cursorColumn = Math.Min(_columns - 1, ((_cursorColumn / 8) + 1) * 8);
                 break;
@@ -462,8 +547,49 @@ public sealed class TerminalBuffer
 
     private void ResetClusterState()
     {
-        _joinNextCharacter = false;
-        _regionalIndicatorPending = false;
+        _canExtendCluster = false;
+    }
+
+    private void EndGraphemeContext()
+    {
+        FlushPendingPrefix();
+        ResetClusterState();
+    }
+
+    private void CancelParser()
+    {
+        _csi.Clear();
+        _osc.Clear();
+        _dcs.Clear();
+        _state = ParserState.Normal;
+    }
+
+    private void FlushPendingPrefix()
+    {
+        if (_pendingPrefix.Length == 0)
+            return;
+
+        var text = _pendingPrefix;
+        _pendingPrefix = "";
+        var column = PreviousContentColumn();
+        if (column >= 0)
+        {
+            var cell = _cells[_cursorRow, column];
+            if (!cell.Continuation && cell.Text.Length > 0 && cell.Text != " ")
+            {
+                if (cell.Text.Length + text.Length <= MaximumClusterCharacters)
+                    _cells[_cursorRow, column] = cell with { Text = cell.Text + text };
+                return;
+            }
+        }
+
+        var current = _cells[_cursorRow, _cursorColumn];
+        if (current.Continuation)
+            return;
+        _cells[_cursorRow, _cursorColumn] = current with
+        {
+            Text = current.Text == " " ? text : current.Text + text
+        };
     }
 
     private void ProcessDcs()
@@ -498,7 +624,10 @@ public sealed class TerminalBuffer
         // SGR after the last column must not make the next glyph overwrite it.
         if (command is 'A' or 'B' or 'C' or 'D' or 'E' or 'F' or 'G' or '`' or
             'd' or 'H' or 'f' or 'J' or 'K' or 'P' or '@' or 'X' or 'L' or 'M' or 'S' or 'T' or 'r')
+        {
             _wrapPending = false;
+            EndGraphemeContext();
+        }
 
         switch (command)
         {
@@ -605,7 +734,7 @@ public sealed class TerminalBuffer
                 if (parameterText.StartsWith(">0", StringComparison.Ordinal))
                 {
                     QueueResponse(
-                        "\x1bP>|Satr(1.0.5)\x1b\\");
+                        $"\x1bP>|Satr({ProductVersion})\x1b\\");
                 }
                 break;
             case 'h':
@@ -675,10 +804,10 @@ public sealed class TerminalBuffer
         switch (GetParameter(parameters, 0, 0))
         {
             case 14:
-                QueueResponse($"\x1b[4;{_rows * 18};{_columns * 9}t");
+                QueueResponse($"\x1b[4;{(int)Math.Round(_rows * _cellHeight)};{(int)Math.Round(_columns * _cellWidth)}t");
                 break;
             case 16:
-                QueueResponse("\x1b[6;18;9t");
+                QueueResponse($"\x1b[6;{(int)Math.Round(_cellHeight)};{(int)Math.Round(_cellWidth)}t");
                 break;
             case 18:
                 QueueResponse($"\x1b[8;{_rows};{_columns}t");
@@ -709,43 +838,49 @@ public sealed class TerminalBuffer
 
     private void WriteTextElement(string text)
     {
-        var rune = Rune.GetRuneAt(text, 0);
-
-        if (_joinNextCharacter)
+        if (!Rune.TryGetRuneAt(text, 0, out var rune))
         {
-            AppendCombiningCharacter(text);
-            _joinNextCharacter = false;
-            _regionalIndicatorPending = false;
-            return;
+            text = "\uFFFD";
+            rune = new Rune(0xFFFD);
         }
 
-        if (rune.Value == 0x200d)
+        var width = GetCellWidth(rune);
+        var style = PaintedStyle();
+        var previous = PreviousContentColumn();
+        if (_canExtendCluster && previous >= 0)
         {
-            AppendCombiningCharacter(text);
-            _joinNextCharacter = true;
-            return;
-        }
-
-        if (IsRegionalIndicator(rune.Value))
-        {
-            if (_regionalIndicatorPending)
+            var cell = _cells[_cursorRow, previous];
+            var combined = cell.Text + text;
+            var starts = StringInfo.ParseCombiningCharacters(combined);
+            if (starts.Length > 0 && starts[^1] < cell.Text.Length)
             {
-                AppendCombiningCharacter(text);
-                _regionalIndicatorPending = false;
-                return;
+                // ponytail: cap a pathological cluster at 256 UTF-16 units; revisit for larger legitimate clusters.
+                if (combined.Length > MaximumClusterCharacters) return;
+                width = GetTextElementWidth(combined);
+                var oldWidth = previous + 1 < _columns && _cells[_cursorRow, previous + 1].Continuation ? 2 : 1;
+                if (width == oldWidth)
+                {
+                    _cells[_cursorRow, previous] = cell with { Text = combined };
+                    return;
+                }
+                ClearCells(_cursorRow, previous, oldWidth);
+                _cursorColumn = previous;
+                _wrapPending = false;
+                text = combined;
+                style = cell.Style;
             }
-
-            _regionalIndicatorPending = true;
-        }
-        else
-        {
-            _regionalIndicatorPending = false;
         }
 
-        if (IsCombining(text))
+        if (width == 0)
         {
             AppendCombiningCharacter(text);
             return;
+        }
+
+        if (_pendingPrefix.Length > 0)
+        {
+            text = _pendingPrefix + text;
+            _pendingPrefix = "";
         }
 
         if (_wrapPending)
@@ -758,8 +893,6 @@ public sealed class TerminalBuffer
 
             _wrapPending = false;
         }
-
-        var width = GetCellWidth(rune);
 
         if (width == 2 && _cursorColumn == _columns - 1)
         {
@@ -774,10 +907,11 @@ public sealed class TerminalBuffer
         NormalizeWideCharacterBoundary(_cursorRow, _cursorColumn);
         NormalizeWideCharacterBoundary(_cursorRow, _cursorColumn + width);
 
-        _cells[_cursorRow, _cursorColumn] = new Cell(text, PaintedStyle(), false);
+        _cells[_cursorRow, _cursorColumn] = new Cell(text, style, false);
+        _canExtendCluster = true;
 
         if (width == 2 && _cursorColumn + 1 < _columns)
-            _cells[_cursorRow, _cursorColumn + 1] = new Cell(string.Empty, PaintedStyle(), true);
+            _cells[_cursorRow, _cursorColumn + 1] = new Cell(string.Empty, style, true);
 
         if (_cursorColumn + width >= _columns)
         {
@@ -792,22 +926,32 @@ public sealed class TerminalBuffer
 
     private void AppendCombiningCharacter(string text)
     {
-        var column = _wrapPending ? _cursorColumn : _cursorColumn - 1;
-
-        while (column >= 0 && _cells[_cursorRow, column].Continuation)
-            column--;
-
-        if (column >= 0 && !string.IsNullOrEmpty(_cells[_cursorRow, column].Text))
+        var column = PreviousContentColumn();
+        if (column >= 0)
         {
             var cell = _cells[_cursorRow, column];
-            _cells[_cursorRow, column] = cell with { Text = cell.Text + text };
+            if (!string.IsNullOrEmpty(cell.Text) && cell.Text != " ")
+            {
+                if (cell.Text.Length + text.Length > MaximumClusterCharacters)
+                    return;
+                _cells[_cursorRow, column] = cell with { Text = cell.Text + text };
+                return;
+            }
         }
+
+        if (_pendingPrefix.Length + text.Length <= MaximumClusterCharacters)
+            _pendingPrefix += text;
     }
 
-    private static bool IsCombining(string text)
+    private int PreviousContentColumn()
     {
-        return GetCellWidth(Rune.GetRuneAt(text, 0)) == 0;
+        var column = _wrapPending ? _cursorColumn : _cursorColumn - 1;
+        while (column >= 0 && _cells[_cursorRow, column].Continuation)
+            column--;
+        return column;
     }
+
+    internal static int GetTextElementWidth(string text) => text.EnumerateRunes().Max(GetCellWidth);
 
     internal static int GetCellWidth(Rune rune)
     {
@@ -945,12 +1089,23 @@ public sealed class TerminalBuffer
 
         foreach (var section in text.TrimStart('?', '>', '!', '=').Split(';'))
         {
-            foreach (var part in section.Split(':'))
+            if (section.Contains(':'))
             {
-                parameters.Add(int.TryParse(part, out var value)
-                    ? value
-                    : null);
+                var head = section[..section.IndexOf(':')];
+                if (int.TryParse(head, out var code) && code is 38 or 48)
+                {
+                    foreach (var part in section.Split(':'))
+                        parameters.Add(int.TryParse(part, out var colorPart) ? colorPart : null);
+                    continue;
+                }
+
+                // Underline variants share the supported single underline; 4:0 disables it.
+                parameters.Add(head == "4" && section.Split(':')[1] == "0" ? 24 :
+                    int.TryParse(head, out var simple) ? simple : null);
+                continue;
             }
+
+            parameters.Add(int.TryParse(section, out var graphic) ? graphic : null);
         }
 
         return parameters;
@@ -1117,6 +1272,9 @@ public sealed class TerminalBuffer
             _currentStyle = default;
             _originMode = false;
             _autoWrapMode = true;
+            _wrapPending = false;
+            ResetClusterState();
+            _pendingPrefix = "";
             ClearAll();
             _cursorRow = 0;
             _cursorColumn = 0;
@@ -1396,21 +1554,7 @@ public sealed class TerminalBuffer
     {
         var physical = new List<(Cell[] Cells, bool Wrapped)>();
         foreach (var line in _scrollback)
-        {
-            var cells = new List<Cell>();
-            foreach (var run in line.Runs)
-            {
-                var elements = StringInfo.GetTextElementEnumerator(run.Text);
-                while (elements.MoveNext())
-                {
-                    var text = elements.GetTextElement();
-                    cells.Add(new Cell(text, run.Style, false));
-                    if (GetCellWidth(Rune.GetRuneAt(text, 0)) == 2) cells.Add(new Cell("", run.Style, true));
-                }
-            }
-            while (cells.Count < line.CellLength) cells.Add(new Cell(" ", default, false));
-            physical.Add((cells.ToArray(), line.WrappedFromPrevious));
-        }
+            physical.Add((CellsFromLine(line), line.WrappedFromPrevious));
         var history = physical.Count;
         var last = Math.Max(screen.CursorRow, screen.SavedRow);
         for (var row = 0; row < screen.Cells.GetLength(0); row++)
@@ -1422,14 +1566,18 @@ public sealed class TerminalBuffer
         }
         physical.RemoveRange(history + last + 1, physical.Count - history - last - 1);
         var packed = new List<(Cell[] Cells, bool Wrapped)>();
+        var originToPacked = new Dictionary<long, int>();
+        var baseIndex = _scrollbackStartIndex;
         var cursor = (Row: 0, Column: 0, Pending: false); var savedCursor = (Row: 0, Column: 0);
         for (var start = 0; start < physical.Count;)
         {
             var end = start + 1;
             while (end < physical.Count && physical[end].Wrapped) end++;
             var logical = new List<Cell>(); var cursorOffset = -1; var savedOffset = -1;
+            var logicalStart = new int[end - start];
             for (var index = start; index < end; index++)
             {
+                logicalStart[index - start] = logical.Count;
                 var source = physical[index].Cells;
                 var length = index + 1 < end ? source.Length : FindLastCharacter(source) + 1;
                 if (index == history + screen.CursorRow)
@@ -1446,6 +1594,7 @@ public sealed class TerminalBuffer
             }
             var output = Enumerable.Repeat(new Cell(" ", default, false), columns).ToArray();
             var column = 0; var wrapped = physical[start].Wrapped;
+            var packedForLogical = new int[logical.Count + 1];
             void Flush()
             {
                 packed.Add((output, wrapped)); wrapped = true;
@@ -1453,22 +1602,35 @@ public sealed class TerminalBuffer
             }
             for (var index = 0; index < logical.Count; index++)
             {
-                var cell = logical[index]; if (cell.Continuation) continue;
+                var cell = logical[index];
+                packedForLogical[index] = packed.Count;
+                if (cell.Continuation) continue;
                 var width = index + 1 < logical.Count && logical[index + 1].Continuation ? 2 : 1;
                 if (column + width > columns) Flush();
+                packedForLogical[index] = packed.Count;
                 if (cursorOffset >= index && cursorOffset < index + width) cursor = (packed.Count, column + cursorOffset - index, false);
                 if (savedOffset >= index && savedOffset < index + width) savedCursor = (packed.Count, column + savedOffset - index);
                 output[column++] = cell;
                 if (width == 2) output[column++] = logical[index + 1];
             }
+            packedForLogical[logical.Count] = packed.Count;
             if (cursorOffset == logical.Count) cursor = (packed.Count, Math.Min(column, columns - 1), column == columns);
             if (savedOffset == logical.Count) savedCursor = (packed.Count, Math.Min(column, columns - 1));
-            packed.Add((output, wrapped)); start = end;
+            packed.Add((output, wrapped));
+            for (var index = start; index < end; index++)
+            {
+                var logicalIndex = Math.Min(logicalStart[index - start], packedForLogical.Length - 1);
+                originToPacked[baseIndex + index] = packedForLogical[logicalIndex];
+            }
+            start = end;
         }
         var screenStart = Math.Max(0, packed.Count - rows);
         _scrollback.Clear();
         for (var row = 0; row < screenStart; row++)
             _scrollback.Add(CreateLine(packed[row].Cells, columns) with { WrappedFromPrevious = packed[row].Wrapped });
+        var remappedMarks = RemapCommandMarks(originToPacked, baseIndex);
+        _commandMarks.Clear();
+        _commandMarks.AddRange(remappedMarks);
         TrimScrollback();
         var result = new Cell[rows, columns]; Fill(result); var wraps = new bool[rows];
         for (var row = screenStart; row < packed.Count; row++)
@@ -1480,6 +1642,74 @@ public sealed class TerminalBuffer
             CursorRow = Math.Clamp(cursor.Row - screenStart, 0, rows - 1), CursorColumn = cursor.Column,
             SavedRow = Math.Clamp(savedCursor.Row - screenStart, 0, rows - 1), SavedColumn = savedCursor.Column,
             ScrollTop = 0, ScrollBottom = rows - 1, WrapPending = cursor.Pending };
+    }
+
+    private List<(long Origin, char Kind)> RemapCommandMarks(
+        Dictionary<long, int> originToPacked,
+        long baseIndex)
+    {
+        var remapped = new List<(long Origin, char Kind)>();
+        foreach (var (origin, kind) in _commandMarks)
+        {
+            if (!originToPacked.TryGetValue(origin, out var packedRow))
+                continue;
+            remapped.Add((baseIndex + packedRow, kind));
+        }
+        return remapped;
+    }
+
+    // ponytail: scrollback stores style runs, not cells. Reconstruct clusters from the
+    // full line so wrap/reflow matches view segmentation; store Cell[] if this shows up in profiles.
+    private static Cell[] CellsFromLine(TerminalLine line)
+    {
+        var text = LineText(line);
+        var cells = new List<Cell>();
+        var pending = "";
+        var enumerator = StringInfo.GetTextElementEnumerator(text);
+        while (enumerator.MoveNext())
+        {
+            var element = enumerator.GetTextElement();
+            var style = StyleAt(line, enumerator.ElementIndex);
+            var width = GetTextElementWidth(element);
+            if (width == 0)
+            {
+                pending += element;
+                continue;
+            }
+
+            cells.Add(new Cell(pending + element, style, false));
+            pending = "";
+            if (width >= 2)
+                cells.Add(new Cell("", style, true));
+        }
+
+        if (pending.Length > 0)
+        {
+            if (cells.Count == 0)
+                cells.Add(new Cell(pending, default, false));
+            else
+            {
+                var index = cells[^1].Continuation && cells.Count > 1 ? cells.Count - 2 : cells.Count - 1;
+                var cell = cells[index];
+                cells[index] = cell with { Text = cell.Text + pending };
+            }
+        }
+
+        while (cells.Count < line.CellLength)
+            cells.Add(new Cell(" ", default, false));
+        return cells.ToArray();
+    }
+
+    private static TerminalStyle StyleAt(TerminalLine line, int offset)
+    {
+        foreach (var run in line.Runs)
+        {
+            if (offset < run.Text.Length)
+                return run.Style;
+            offset -= run.Text.Length;
+        }
+
+        return default;
     }
 
     private static Cell[,] ResizeCells(Cell[,] source, int columns, int rows)
@@ -1623,7 +1853,9 @@ public sealed class TerminalBuffer
         TerminalStyle? style = null;
 
         for (var column = 0; column < cellLength; column++)
-            AppendCellToRuns(cells[row, column], runs, text, ref style);
+            AppendCellToRuns(row == _cursorRow && column == _cursorColumn && _pendingPrefix.Length > 0
+                ? cells[row, column] with { Text = _pendingPrefix + cells[row, column].Text }
+                : cells[row, column], runs, text, ref style);
 
         FlushRun(runs, text, style);
         return runs;

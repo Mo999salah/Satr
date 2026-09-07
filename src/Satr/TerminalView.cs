@@ -8,6 +8,8 @@ using Avalonia.Threading;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
+using Avalonia.Input.TextInput;
+using Avalonia.Media.TextFormatting;
 using Avalonia.Media;
 namespace Satr;
 
@@ -16,6 +18,8 @@ public sealed class TerminalView : ContentControl
 {
     private readonly ScrollViewer _scroll;
     private readonly Surface _surface;
+    private readonly ImeClient _imeClient;
+    private readonly ImeComposition _ime = new();
     private TerminalSnapshot? _snapshot;
     private bool _smartRtl;
     private double _cellWidth = 8.5, _lineHeight = 18;
@@ -30,6 +34,7 @@ public sealed class TerminalView : ContentControl
     public event Action<Uri>? LinkRequested;
     public event Action<bool>? FollowChanged;
     public event Action? ViewportChanged;
+    public bool IsComposing => _ime.IsActive;
     public bool HasSelection => _anchor is not null && _end is not null && _anchor != _end;
     public double VerticalOffset => _scroll.Offset.Y;
     public double ViewportWidth => _scroll.Viewport.Width;
@@ -47,6 +52,9 @@ public sealed class TerminalView : ContentControl
         Avalonia.Automation.AutomationProperties.SetName(this, "Satr terminal — drag to select, Shift+drag while captured, Ctrl+Click for links");
         ToolTip.SetTip(this, "Shift+drag selects while captured • Ctrl+Click opens links");
         _surface = new Surface(this) { VerticalAlignment = VerticalAlignment.Top };
+        _imeClient = new ImeClient(this);
+        TextInputOptions.SetMultiline(this, true);
+        AddHandler(TextInputMethodClientRequestedEvent, (_, e) => e.Client = _imeClient);
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
         VerticalContentAlignment = VerticalAlignment.Stretch;
 
@@ -89,6 +97,7 @@ public sealed class TerminalView : ContentControl
             e.Pointer.Capture(null);
             e.Handled = true;
         };
+        LostFocus += (_, _) => { if (_ime.IsActive) CancelComposition(); };
     }
 
     public void Present(TerminalSnapshot snapshot, bool smartRtl, double cellWidth,
@@ -119,10 +128,12 @@ public sealed class TerminalView : ContentControl
         _surface.InvalidateVisual();
         if (followOutput) _scroll.ScrollToEnd();
         else if (trimmed > 0) ScrollToVerticalOffset(Math.Max(0, VerticalOffset - trimmed * lineHeight));
+        _imeClient.NotifyCursor();
     }
 
     public void Clear()
     {
+        _ime.Clear();
         _snapshot = null; ResetSearch();
         _layouts.Clear();
         _surface.Height = _lineHeight;
@@ -312,7 +323,7 @@ public sealed class TerminalView : ContentControl
         while (enumerator.MoveNext())
         {
             var element = enumerator.GetTextElement();
-            var width = element.EnumerateRunes().Max(TerminalBuffer.GetCellWidth);
+            var width = TerminalBuffer.GetTextElementWidth(element);
             widths.Add((enumerator.ElementIndex, element.Length, width, logicalColumn));
             logicalColumn += width;
         }
@@ -380,7 +391,7 @@ public sealed class TerminalView : ContentControl
     private static (TerminalColor Foreground, TerminalColor Background) Colors(TerminalStyle style)
     {
         var fg = style.Foreground ?? new TerminalColor(230, 230, 230);
-        var bg = style.Background ?? new TerminalColor(12, 12, 12);
+        var bg = style.Background ?? new TerminalColor(25, 25, 25);
         if (style.Inverse) (fg, bg) = (bg, fg);
         if (style.Dim) fg = new((byte)(fg.Red * .55 + bg.Red * .45), (byte)(fg.Green * .55 + bg.Green * .45), (byte)(fg.Blue * .55 + bg.Blue * .45));
         if (style.Hidden) fg = bg;
@@ -422,7 +433,55 @@ public sealed class TerminalView : ContentControl
                 dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(90, 230, 230, 230)), new Pen(Brushes.LightGray, 1), rect);
             }
         }
+        if (_ime.IsActive)
+            DrawPreedit(dc);
+    }
 
+    private void DrawPreedit(DrawingContext dc)
+    {
+        var bounds = CursorBounds();
+        using var formatted = PreeditLayout();
+        var width = Math.Max(bounds.Width, formatted.WidthIncludingTrailingWhitespace);
+        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(50, 70, 125, 200)), null,
+            new Rect(bounds.X, bounds.Y, width, bounds.Height));
+        formatted.Draw(dc, new Point(bounds.X, bounds.Y + Math.Max(0, (_lineHeight - formatted.Height) / 2)));
+        var caret = PreeditCursorBounds();
+        dc.DrawLine(new Pen(Brushes.White, 1), caret.TopLeft, caret.BottomLeft);
+        dc.DrawLine(new Pen(Brushes.LightGray, 1),
+            new Point(bounds.X, bounds.Y + bounds.Height - 1),
+            new Point(bounds.X + width, bounds.Y + bounds.Height - 1));
+    }
+
+    private TextLayout PreeditLayout() => new(_ime.Text, new Typeface(FontFamily), FontSize, Brushes.White);
+
+    private Rect PreeditCursorBounds()
+    {
+        var origin = CursorBounds();
+        if (!_ime.IsActive) return origin;
+        using var layout = PreeditLayout();
+        var caret = layout.HitTestTextPosition(_ime.Cursor ?? _ime.Text.Length);
+        return new Rect(origin.X + caret.X, origin.Y, 1, _lineHeight);
+    }
+
+    public Rect CursorBounds()
+    {
+        if (_snapshot is null)
+            return new Rect(0, 0, _cellWidth, _lineHeight);
+        var y = _snapshot.CursorRow * _lineHeight;
+        if (_snapshot.CursorRow < 0 || _snapshot.CursorRow >= _snapshot.Lines.Count)
+            return new Rect(_snapshot.CursorColumn * _cellWidth, y, _cellWidth, _lineHeight);
+        var cell = Layout(_snapshot.CursorRow).Cells.FirstOrDefault(item =>
+            item.Columns > 0 && _snapshot.CursorColumn >= item.Column &&
+            _snapshot.CursorColumn < item.Column + item.Columns);
+        return new Rect(cell?.X ?? _snapshot.CursorColumn * _cellWidth, y,
+            Math.Max(1, cell?.Width ?? _cellWidth), _lineHeight);
+    }
+
+    public void CancelComposition()
+    {
+        _ime.Clear();
+        _imeClient.Reset();
+        _surface.InvalidateVisual();
     }
     private void DrawRow(DrawingContext dc, RowLayout layout)
     {
@@ -502,6 +561,29 @@ public sealed class TerminalView : ContentControl
     private sealed class Surface(TerminalView owner) : Control
     {
         public override void Render(DrawingContext drawingContext) => owner.Draw(drawingContext);
+    }
+
+    private sealed class ImeClient(TerminalView view) : TextInputMethodClient
+    {
+        public override Visual TextViewVisual => view._surface;
+        public override bool SupportsPreedit => true;
+        public override bool SupportsSurroundingText => false;
+        public override string SurroundingText => "";
+        public override Rect CursorRectangle => view.PreeditCursorBounds();
+        public override TextSelection Selection { get => default; set { } }
+
+        public override void SetPreeditText(string? preeditText) =>
+            SetPreeditText(preeditText, null);
+
+        public override void SetPreeditText(string? preeditText, int? cursorPos)
+        {
+            view._ime.Set(preeditText, cursorPos);
+            view._surface.InvalidateVisual();
+            RaiseCursorRectangleChanged();
+        }
+
+        public void NotifyCursor() => RaiseCursorRectangleChanged();
+        public void Reset() => RequestReset();
     }
     private sealed record DrawCell(int Start, int Length, double X, double Width, bool Rtl, TerminalStyle Style, int Column, int Columns);
     private sealed record DrawGlyph(string Text, double X, double Width, bool Rtl, int Start, TerminalStyle Style)
