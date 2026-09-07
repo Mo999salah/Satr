@@ -12,7 +12,7 @@ foreach ($rid in @('linux-x64', 'win-x64')) {
     New-Item -ItemType Directory -Force (Join-Path $destination 'licenses') | Out-Null
     Copy-Item (Join-Path $root 'licenses/*') (Join-Path $destination 'licenses') -Recurse -Force
     if ($rid -eq 'linux-x64') {
-        Copy-Item (Join-Path $root 'packaging/install-linux.sh') $destination
+        Copy-Item (Join-Path $root 'packaging/install-linux.sh'), (Join-Path $root 'packaging/uninstall-linux.sh') $destination
         foreach ($native in @('Satr','libporta_pty.so','libSkiaSharp.so','libHarfBuzzSharp.so')) {
             if (!(Test-Path (Join-Path $destination $native))) { throw "Missing Linux artifact: $native" }
         }

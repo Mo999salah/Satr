@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.2.0-preview.1"
+  #define AppVersion "0.3.0"
 #endif
 [Setup]
 AppId={{A16AFDC9-9A8C-46BF-B0D7-6B9260D55DF3}
@@ -29,4 +29,4 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "..\artifacts\win-x64\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
 Name: "{group}\Satr Preview"; Filename: "{app}\Satr.exe"; WorkingDir: "{userdocs}"
-; Personal drafts in LocalAppData\Satr-Preview are intentionally retained.
+; Personal drafts in LocalAppData\Satr are intentionally retained.
