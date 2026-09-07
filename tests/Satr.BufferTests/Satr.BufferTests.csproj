@@ -9,6 +9,8 @@
   <ItemGroup>
     <Compile Include="..\..\src\Satr\TerminalBuffer.cs" Link="TerminalBuffer.cs" />
     <Compile Include="..\..\src\Satr\SmartRtl.cs" Link="SmartRtl.cs" />
+    <Compile Include="..\..\src\Satr\ArabicInput.cs" Link="ArabicInput.cs" />
+    <Compile Include="..\..\src\Satr\Utf8OutputDecoder.cs" Link="Utf8OutputDecoder.cs" />
   </ItemGroup>
   <ItemGroup><PackageReference Include="Unicode.Bidi" Version="0.3.18" /></ItemGroup>
 </Project>
