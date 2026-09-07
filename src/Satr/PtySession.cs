@@ -13,6 +13,8 @@ internal sealed class PtySession : IAsyncDisposable
     private readonly Task _writer;
     private Task? _reader;
     private volatile bool _disposed;
+    private Task? _disposeTask;
+    public event Action<string>? Warning;
     public event Action<string>? Output;
     public event Action<string>? Ended;
 
@@ -25,31 +27,9 @@ internal sealed class PtySession : IAsyncDisposable
     public static async Task<PtySession> Start(string profile, string directory, int columns, int rows, CancellationToken token)
     {
         if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
-        string app;
-        string[] args;
-        if (profile is "Codex" or "CodexResume" or "Claude" or "Agy" or "AgyResume" or "Omp" or "OmpResume")
-        {
-            var tool = profile == "Claude" ? "claude" : profile is "Agy" or "AgyResume" ? "agy" : profile is "Omp" or "OmpResume" ? "omp" : "codex";
-            app = FindExecutable(tool) ?? throw new FileNotFoundException($"{tool} not found in PATH. Install it first, then reopen Satr.");
-            args = profile == "CodexResume" ? ["resume"] : profile == "AgyResume" ? ["--continue"] : profile == "OmpResume" ? ["--continue"] : [];
-            if (OperatingSystem.IsWindows() && Path.GetExtension(app) is ".cmd" or ".bat")
-            {
-                // Only fixed tool names enter cmd syntax; the project path travels in Cwd.
-                app = Path.Combine(Environment.SystemDirectory, "cmd.exe");
-                args = ["/D", "/S", "/C", tool + (profile == "CodexResume" ? " resume" : profile is "AgyResume" or "OmpResume" ? " --continue" : "")];
-            }
-        }
-        else if (OperatingSystem.IsWindows())
-        {
-            app = FindExecutable("pwsh") ?? Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
-            args = ["-NoLogo"];
-        }
-        else
-        {
-            var shell = Environment.GetEnvironmentVariable("SHELL");
-            app = shell is not null && Path.IsPathFullyQualified(shell) && File.Exists(shell) ? shell : "/bin/bash";
-            args = ["-i"];
-        }
+        var plan = ProfileCatalog.ResolveLaunch(profile, FindExecutable);
+        var app = plan.App;
+        var args = plan.Arguments;
         var environment = new Dictionary<string, string> { ["TERM"] = "xterm-256color", ["COLORTERM"] = "truecolor" };
         if (!OperatingSystem.IsWindows() && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("LANG")))
             environment["LANG"] = "C.UTF-8";
@@ -88,6 +68,15 @@ internal sealed class PtySession : IAsyncDisposable
         if (!_input.Writer.TryWrite(Encoding.UTF8.GetBytes(text))) throw new IOException("Session not accepting input right now. This batch was not sent; try again.");
     }
 
+    public void WriteResponses(IReadOnlyList<string> responses)
+    {
+        if (_disposed) return;
+        // One batch avoids filling the queue with individual capability replies.
+        var text = string.Concat(responses);
+        if (text.Length > 1024 * 1024 || !_input.Writer.TryWrite(Encoding.UTF8.GetBytes(text)))
+            Warning?.Invoke("Terminal response queue is full. A capability reply could not be delivered; reopen the session if the tool is waiting.");
+    }
+
     public void Resize(int columns, int rows) { if (!_disposed) _pty.Resize(columns, rows); }
 
     private async Task WriteLoop()
@@ -106,34 +95,55 @@ internal sealed class PtySession : IAsyncDisposable
 
     private async Task ReadLoop()
     {
-        var decoder = Encoding.UTF8.GetDecoder();
+        var decoder = new Utf8OutputDecoder();
         var bytes = new byte[32768];
-        var chars = new char[32769];
         try
         {
             while (!_stop.IsCancellationRequested)
             {
                 var count = await _pty.ReaderStream.ReadAsync(bytes, _stop.Token);
                 if (count == 0) break;
-                var length = decoder.GetChars(bytes, 0, count, chars, 0);
-                if (length > 0 && !_disposed) Output?.Invoke(new string(chars, 0, length));
+                var text = decoder.Decode(bytes.AsSpan(0, count));
+                if (text.Length > 0 && !_disposed) Output?.Invoke(text);
             }
+            var tail = decoder.Decode([], flush: true);
+            if (tail.Length > 0 && !_disposed) Output?.Invoke(tail);
             if (!_disposed) Ended?.Invoke("Session ended — you can open a new session.");
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!_disposed) Ended?.Invoke("Session stopped: " + ex.Message); }
     }
 
-    public async ValueTask DisposeAsync()
+    internal static readonly TimeSpan DisposeBudget = TimeSpan.FromSeconds(5);
+
+    public ValueTask DisposeAsync()
     {
-        if (_disposed) return;
+        lock (_stop) return new ValueTask(_disposeTask ??= DisposeCore());
+    }
+
+    private async Task DisposeCore()
+    {
         _disposed = true;
         _input.Writer.TryComplete();
         // Keep draining output while ConPTY closes; stopping the reader first can
         // deadlock ClosePseudoConsole when the child's output pipe is full.
-        await Task.Run(_pty.Dispose);
-        _stop.Cancel();
-        await Task.WhenAll(_reader ?? Task.CompletedTask, _writer);
+        try
+        {
+            await AwaitBounded(Task.Run(() =>
+            {
+                if (!_pty.WaitForExit(0)) _pty.Kill();
+                if (!_pty.WaitForExit((int)DisposeBudget.TotalMilliseconds))
+                    throw new TimeoutException("The terminal process did not exit.");
+                _pty.Dispose();
+            }), DisposeBudget + DisposeBudget);
+        }
+        finally { _stop.Cancel(); }
+        await AwaitBounded(Task.WhenAll(_reader ?? Task.CompletedTask, _writer), DisposeBudget);
         _stop.Dispose();
+    }
+
+    internal static async Task AwaitBounded(Task task, TimeSpan budget)
+    {
+        await task.WaitAsync(budget);
     }
 }
