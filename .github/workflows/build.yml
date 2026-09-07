@@ -3,20 +3,39 @@ on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
 jobs:
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Buffer regressions
+        run: dotnet run --project tests/Satr.BufferTests/Satr.BufferTests.csproj -c Release
+      - name: Port checks
+        run: dotnet run --project tests/Satr.PortChecks/Satr.PortChecks.csproj -c Release
   publish:
+    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Build self-contained packages (no runtime tests)
+      - name: Install Inno Setup
         shell: pwsh
-        run: ./scripts/Build.ps1
+        run: choco install innosetup --no-progress -y
+      - name: Build self-contained packages and installer
+        shell: pwsh
+        run: ./scripts/Build.ps1 -Compiler "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: Satr
           path: |
             artifacts/*.tar.gz
             artifacts/*.zip
+            artifacts/*.exe
             artifacts/SHA256SUMS.txt

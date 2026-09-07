@@ -11,6 +11,6 @@ Include the OS version, desktop session (X11 or Wayland), Satr version, font, CL
 Install .NET SDK 10 and build with `dotnet build src/Satr/Satr.csproj -c Release`.
 Keep changes focused. Preserve logical Unicode order in stored or transmitted text; shaping belongs in the renderer. Retain copyright and dependency notices. Do not add telemetry or hard-code credentials or personal paths.
 
-Describe the validation actually performed in your pull request. Distinguish a build from GUI or CLI validation. The optional checks under `tests/` are not run by the packaging workflow. Add a small reproducible check for non-trivial behavior. Do not make paid AI requests merely to build the project.
+Describe the validation actually performed in your pull request. Distinguish a build from GUI or CLI validation. CI runs the checks under `tests/` on Windows and Linux before packaging. These checks do not establish native IME, GUI, or live AI CLI compatibility. Add a small reproducible check for non-trivial behavior. Do not make paid AI requests merely to build the project.
 
 Contributions are distributed under the MIT license.
