@@ -16,7 +16,7 @@ Satr answers a narrow question: *how do I keep AI CLI work organized per project
 
 | You want to… | Satr gives you… |
 | --- | --- |
-| Work in a repo with shell + AI sessions side by side | Project-labelled tabs that restore on reopen |
+| Work in a repo with shell + AI sessions side by side | Project-labelled sessions in a collapsible sidebar, restored on reopen |
 | Paste prompts, code, and mixed Arabic/English text | A terminal that shapes and lays out mixed script correctly |
 | Jump back through long CLI output | Scrollback search (`Ctrl+Shift+F`) and readable transcript export |
 | Pick up where Codex or another tool left off | Resume launchers and saved workspace state |
@@ -29,9 +29,13 @@ Satr is **not** an AI product. It launches tools already on your `PATH` and rend
 1. **Pick a project directory** — tabs are scoped to a folder.
 2. **Open a session** — shell, Codex, Claude Code, Agy, Omp, or a resumed CLI.
 3. **Type or paste in the terminal** — review output, search scrollback, copy selections.
-4. **Close the window** — layout, tabs, font, and geometry are saved; Codex tabs reopen via `codex resume`.
+4. **Close the window** — tabs, project roots, session folders, font, and geometry are saved. Restored tabs wait for an explicit launch with Ctrl+Shift+R. Codex resumes through its own picker; other continuation profiles use the CLI's own selection behavior. Satr does not bind saved tabs to individual AI conversation IDs or restore terminal output.
 
 Multi-line paste requires bracketed-paste support from the running CLI. The path bar follows shell OSC 7 when the shell emits it.
+
+Unavailable tools remain visible and open Setup. Check again searches the running process's PATH; restart Satr if an installer added a new PATH directory. Unsupported saved profiles are retained but cannot launch. Install the vendor's CLI separately, complete authentication in its native interface, and then launch it from New.
+
+The workspace uses a neutral charcoal theme, a collapsible sidebar grouping sessions by project, and a compact tool-specific launch prompt for restored sessions. Settings, commands, search, and setup share the same visual theme.
 
 ## Keyboard shortcuts
 
@@ -118,7 +122,7 @@ dotnet run --project src/Satr/Satr.csproj
 ./scripts/Build.ps1 -Dotnet dotnet -Compiler 'C:/path/to/ISCC.exe'
 ```
 
-Artifacts land in `artifacts/`. CI builds archives on push and pull request but does not publish releases or run runtime checks. Before a release:
+Artifacts land in `artifacts/`. CI runs buffer/port checks on Windows and Linux, then builds archives and the Windows installer. It does not publish releases or establish GUI/native CLI compatibility. To run the checks locally:
 
 ```bash
 dotnet run --project tests/Satr.PortChecks/Satr.PortChecks.csproj
@@ -144,6 +148,9 @@ Stack: **Avalonia 12.1.2**, **Porta.Pty 2.2.2**, **Unicode.Bidi 0.3.18**.
 - Directory tracking needs shell OSC 7; otherwise the launch path is shown.
 - Native Wayland is opt-in; X11/XWayland remains the supported default.
 - Installer signing, clean-machine validation, and live CLI compatibility testing remain release work.
+- IME preedit and its caret are implemented; native composition and candidate positioning still require validation on each supported desktop backend.
+- Terminal replies are batched. If the input queue is exhausted, Satr reports the undelivered reply rather than silently dropping it. A waiting tool may need its session reopened.
+- A shutdown timeout is reported as a failure, not successful termination. Native process-tree cleanup still needs platform-specific runtime checks.
 
 ## Contributing and lineage
 
