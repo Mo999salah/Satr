@@ -1,33 +1,36 @@
 # Satr
 
-**An Arabic-first terminal workspace for Windows and Linux.**
+**An English-first terminal workspace for Windows and Linux.**
 
-[Downloads](https://github.com/Mo999salah/Satr/releases/tag/v0.2.0-preview.1) · [Issues](https://github.com/Mo999salah/Satr/issues) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
+[Downloads](https://github.com/Mo999salah/Satr/releases) · [Issues](https://github.com/Mo999salah/Satr/issues) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
 
-Satr combines a terminal with an Arabic prompt editor. Write mixed Arabic and English text in logical Unicode order, transfer it to a CLI, and keep a saved draft for each project session. The application interface currently uses Arabic; this README is in English.
+Satr provides a full-width terminal with an English interface, project tabs, and direct access to shells and AI CLIs on Windows and Linux. The separate prompt editor has been removed from the current source; existing preview downloads may still include it. The application interface is in English.
 
 Built by [Mohamad Salah](https://mohamadsala.me/).
 
-> **Early preview:** 0.2.0-preview.1 has been compiled and packaged. Graphical behavior, Linux runtime compatibility, installer execution and AI CLI workflows have not been validated. These downloads are experimental.
+> **0.3.0:** full-width terminal, English UI, search, command palette, tab controls, persisted window settings, scrollback reflow, IME plumbing and optional native Wayland startup.
 
 ## Downloads
 
 | Platform | Package |
 | --- | --- |
-| Windows x64 | [Installer (.exe)](https://github.com/Mo999salah/Satr/releases/download/v0.2.0-preview.1/Satr-Setup-0.2.0-preview.1-win-x64.exe) |
-| Windows x64 | [Portable (.zip)](https://github.com/Mo999salah/Satr/releases/download/v0.2.0-preview.1/Satr-0.2.0-preview.1-win-x64.zip) |
-| Linux x64 | [Portable (.tar.gz)](https://github.com/Mo999salah/Satr/releases/download/v0.2.0-preview.1/Satr-0.2.0-preview.1-linux-x64.tar.gz) |
-| Source | [Source archive (.zip)](https://github.com/Mo999salah/Satr/releases/download/v0.2.0-preview.1/Satr-0.2.0-preview.1-source.zip) |
-| Integrity | [SHA-256 checksums](https://github.com/Mo999salah/Satr/releases/download/v0.2.0-preview.1/SHA256SUMS.txt) |
+| Windows x64 | Release installer and portable archive |
+| Linux x64 | Release portable archive |
+| Source | GitHub source archive |
 
 Packages include the .NET runtime. Install AI tools separately and make them available on `PATH`. The Windows installer is unsigned. No AUR package is published.
 
 ## Features implemented
 
-- Arabic prompt editor with RTL/LTR switching, text import/export and retained drafts.
+- Full-width terminal with project-labelled tabs; type or paste directly into the active CLI.
 - ANSI rendering with Unicode bidirectional layout and Arabic shaping.
 - Project directories, multiple sessions and lazy restoration of saved tabs.
-- Launch actions for Codex, `codex resume`, Claude Code and the system shell.
+- Search across scrollback with `Ctrl+Shift+F`, `Enter`, `Shift+Enter` and `F3`.
+- Custom tab names, tab movement, ended-session restart and per-tab status.
+- Font family, font size, scrollback depth and window geometry persistence.
+- Current-directory tracking through shell OSC 7 integration when the shell emits it.
+- Arabic IME preedit support on the terminal surface.
+- Launch actions for Codex, `codex resume`, Claude Code, Agy, Omp (plus `--continue` resume) and the system shell.
 - Bracketed paste, application cursor keys, alternate screen, SGR mouse and focus reporting.
 - Selection, clipboard text, scrollback, font-size adjustment and a readable text transcript.
 - Atomic workspace saves, backup recovery and draft archiving when closing tabs.
@@ -39,42 +42,45 @@ Implemented launch actions do not mean verified compatibility with every CLI ver
 
 ### Windows
 
-Run the installer, or extract the **entire** portable ZIP and open `Satr.exe`. Keep native DLLs and ConPTY host directories beside the executable. The preview installs per user as **Satr Preview**, separately from the earlier WPF version. ConPTY requires Windows 10 build 17763 or newer.
+Run the installer, or extract the **entire** portable ZIP and open `Satr.exe`. Keep native DLLs and ConPTY host directories beside the executable. The installer installs per user as **Satr Preview**, separately from the earlier WPF version. ConPTY requires Windows 10 build 17763 or newer.
 
 ### Arch Linux
 
-The intended setup below still requires validation on a real x86_64 desktop. Use X11 or XWayland; native Wayland is not configured in this preview.
+The portable package targets x86_64. X11/XWayland remains the default. Native Wayland is available as an explicit experimental opt-in:
 
 ```bash
 sudo pacman -S --needed libx11 libice libsm libxrandr libxi libxcursor fontconfig freetype2 icu openssl zlib ttf-dejavu noto-fonts noto-fonts-emoji xorg-xwayland
-mkdir satr-preview
-tar -xzf Satr-0.2.0-preview.1-linux-x64.tar.gz -C satr-preview
-cd satr-preview
+mkdir satr
+tar -xzf Satr-0.3.0-linux-x64.tar.gz -C satr
+cd satr
 chmod +x Satr
 ./Satr
+# Optional native Wayland backend on Avalonia 12.1:
+SATR_BACKEND=wayland ./Satr
 # Optional per-user installation and application-menu entry:
 bash install-linux.sh
 ```
 
-The script installs into `$XDG_DATA_HOME/satr-preview`, falling back to `~/.local/share/satr-preview`, and creates `~/.local/bin/satr-preview`. Do not run it with `sudo`. Close an existing installation before replacing files.
+The script installs into `$XDG_DATA_HOME/satr`, falling back to `~/.local/share/satr`, creates `~/.local/bin/satr` plus an application-menu entry, and removes legacy `satr-preview` launchers. `bash uninstall-linux.sh` (beside it) removes the install but keeps workspace data. Do not run it with `sudo`. Close an existing installation before replacing files.
 
 ## Workflow
 
 1. Choose a project directory and open a shell or Codex session.
-2. Write a prompt in the Arabic editor.
-3. Transfer it with **Ctrl+Enter**. The editor keeps its copy.
-4. Review the text in the terminal and press **Enter** there to submit it.
+2. Type directly into the terminal or paste clipboard text with **Ctrl+V**.
+3. Review the text and press **Enter** to submit it.
 
-Multi-line transfers are rejected if the session has not enabled bracketed paste. The displayed directory is the starting directory; it does not track `cd`. Restoration launches only the selected tab. Saved Codex tabs reopen through `codex resume`. Closing a tab archives its draft; closing the window saves the workspace and terminates sessions.
+Multi-line pastes are rejected if the session has not enabled bracketed paste. The displayed directory follows shell OSC 7 when available and otherwise remains the starting directory. Restoration launches only the selected tab. Saved Codex tabs reopen through `codex resume`. Closing the window saves the workspace and terminates sessions.
 
 | Shortcut | Action |
 | --- | --- |
-| Ctrl+Shift+E | Focus the prompt editor |
-| Ctrl+Enter in the editor | Transfer without submitting |
 | Ctrl+Shift+T | Open a shell tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Switch tabs |
 | Ctrl+Shift+W | Close the current tab |
 | Ctrl+Shift+C | Copy selected terminal text |
+| Ctrl+Shift+F | Search scrollback |
+| F3 / Shift+F3 | Next / previous search result |
+| Ctrl+Shift+R | Restart ended session |
+| Ctrl+Shift+PageUp / PageDown | Move current tab |
 | Ctrl+V in the terminal | Paste clipboard text |
 | Shift + mouse selection | Select while a CLI captures mouse input |
 
@@ -84,10 +90,10 @@ Satr adds no telemetry, updater, API-key store or application network client. La
 
 | Platform | Workspace location |
 | --- | --- |
-| Windows | `%LocalAppData%\Satr-Preview` |
-| Linux | `$XDG_STATE_HOME/Satr-Preview` or `~/.local/state/Satr-Preview` |
+| Windows | `%LocalAppData%\Satr` |
+| Linux | `$XDG_STATE_HOME/Satr` or `~/.local/state/Satr` |
 
-`SATR_DATA_DIR` overrides the location. The old WPF workspace is not automatically imported or modified. Do not share a data directory between running versions. Uninstalling on Windows preserves personal drafts.
+`SATR_DATA_DIR` overrides the location. A one-time automatic migration moves an existing `Satr-Preview` workspace to `Satr`. The old WPF workspace is not automatically imported or modified. Do not share a data directory between running versions. Clipboard images are stored under `clipboard-images` in the workspace and are not uploaded by Satr. Uninstalling on Windows preserves workspace data.
 
 ## Build from source
 
@@ -114,7 +120,7 @@ dotnet publish src/Satr/Satr.csproj -c Release -r linux-x64 --self-contained tru
 
 Packages go to `artifacts/`, which is excluded from Git. GitHub Actions builds archives on pushes and pull requests; it does not automatically publish releases or run runtime checks.
 
-Optional checks are available but were **not executed for this preview**:
+Optional checks (run before release):
 
 ```bash
 dotnet run --project tests/Satr.PortChecks/Satr.PortChecks.csproj
@@ -136,11 +142,10 @@ Dependencies: **Avalonia 12.1.2**, **Porta.Pty 2.2.2**, **Unicode.Bidi 0.3.18**.
 
 ## Known limitations
 
-- Arabic shaping, mixed-script selection, input methods, fonts and DPI need Linux runtime validation.
-- Codex resizing, paste, mouse reporting, interrupts and process cleanup need runtime validation.
-- Direct terminal IME and custom-surface accessibility need review; the separate editor and text transcript offer alternative input and reading paths.
-- Clipboard images, the earlier font-family dialog and detailed window-placement settings are not ported. Font size and RTL preference are persisted.
-- Clean-machine installer validation, binary signing and native Wayland integration remain future work.
+- CLI acceptance of pasted image paths depends on the selected tool; Satr stores the image and sends its path.
+- Current-directory tracking requires shell OSC 7 integration; shells that do not emit it retain the launch directory.
+- Native Wayland is experimental and opt-in; X11/XWayland remains the fallback path.
+- Clean-machine installer validation, binary signing and live Windows/Linux CLI compatibility remain release work.
 
 ## Contributing and license
 
