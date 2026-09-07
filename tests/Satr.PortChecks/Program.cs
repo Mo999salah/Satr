@@ -21,6 +21,14 @@ Check(!ProfileCatalog.IsLaunchable("Codex", _ => null), "missing tool is not lau
 var availableCaption = ProfileCatalog.MenuCaption(ProfileCatalog.Find("Codex")!.Value, ToolPresence.Available);
 Check(availableCaption.Contains("Available", StringComparison.Ordinal) && availableCaption.Contains("setup", StringComparison.OrdinalIgnoreCase), "available menu offers setup");
 Check(ProfileCatalog.PaletteCaption(ProfileCatalog.Find("Codex")!.Value, ToolPresence.Installed) == "Session: new Codex", "installed palette label");
+var customKeys = MainWindow.ValidateShortcuts(new() { ["Commands"] = "Ctrl+Alt+P" });
+Check(customKeys["Commands"].Contains("Alt"), "custom shortcut applied");
+try { MainWindow.ValidateShortcuts(new() { ["Commands"] = "A" }); throw new Exception("typing shortcut accepted"); } catch (ArgumentException) { }
+try { MainWindow.ValidateShortcuts(new() { ["Commands"] = "Ctrl+Shift+F" }); throw new Exception("duplicate shortcut accepted"); } catch (ArgumentException) { }
+var conversation = "01234567-89ab-cdef-0123-456789abcdef";
+Check(ProfileCatalog.ResolveLaunch("Codex", _ => "/opt/codex", conversation).Arguments is ["resume", "01234567-89ab-cdef-0123-456789abcdef"], "exact codex binding");
+Check(ProfileCatalog.ResolveLaunch("Omp", _ => "/opt/omp", conversation).Arguments is ["--resume", "01234567-89ab-cdef-0123-456789abcdef"], "exact omp binding");
+try { ProfileCatalog.ResolveLaunch("Codex", _ => "/opt/codex", "--bad & command"); throw new Exception("invalid ID accepted"); } catch (ArgumentException) { }
 var threw = false;
 try { ProfileCatalog.ResolveLaunch("Claude", _ => null); } catch (FileNotFoundException) { threw = true; }
 Check(threw, "launch plan requires PATH");
@@ -56,6 +64,11 @@ try
 {
     Environment.SetEnvironmentVariable("SATR_DATA_DIR", temporary);
     Check(WorkspaceStore.DataDirectory == temporary, "data override");
+    var preferences = new SavedWorkspace([new SavedTab("Codex", temporary, "", true, Transcript: "مرحبا", ConversationId: conversation)], 0,
+        Projects: [new SavedProject(temporary, true, true)], SidebarHidden: true, SidebarWidth: 310, SaveTranscripts: true);
+    WorkspaceStore.Save(WorkspaceStore.StatePath, preferences);
+    var roundTrip = WorkspaceStore.Load(WorkspaceStore.StatePath);
+    Check(roundTrip.Projects is [{ Pinned: true, Collapsed: true }] && roundTrip.SidebarHidden && roundTrip.SidebarWidth == 310 && roundTrip.Tabs[0].Transcript == "مرحبا" && roundTrip.Tabs[0].ConversationId == conversation, "workspace preferences and transcript roundtrip");
     var state = new SavedWorkspace([new SavedTab("Codex", temporary, "arabic draft", true)], 0, 19, false);
     WorkspaceStore.Save(WorkspaceStore.StatePath, state);
     WorkspaceStore.Save(WorkspaceStore.StatePath, state with { FontSize = 20 });

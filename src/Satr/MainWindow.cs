@@ -17,6 +17,7 @@ public sealed partial class MainWindow : Window
 {
     private readonly TerminalView _terminal = new() { Background = Ui.Terminal, FontSize = 16,
         FontFamily = new FontFamily(OperatingSystem.IsWindows() ? "Cascadia Mono, JetBrains Mono, Consolas, Segoe UI" : "JetBrains Mono, DejaVu Sans Mono, Noto Sans Arabic") };
+    private readonly string _defaultTerminalFont = OperatingSystem.IsWindows() ? "Cascadia Mono, JetBrains Mono, Consolas, Segoe UI" : "JetBrains Mono, DejaVu Sans Mono, Noto Sans Arabic";
     private readonly TextBlock _status = new() { Text = "Ready", TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Ui.Muted, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _path = new() { TextTrimming = TextTrimming.CharacterEllipsis, Foreground = Ui.Muted, VerticalAlignment = VerticalAlignment.Center, FlowDirection = FlowDirection.LeftToRight };
     private readonly ListBox _tabStrip = new() { Padding = new Thickness(0), Background = Brushes.Transparent };
@@ -40,6 +41,9 @@ public sealed partial class MainWindow : Window
         public TextBlock Detail = new();
         public Border ProjectHeading = new();
         public Border Pip = Ui.Pip();
+        public string Transcript = "";
+        public string? ConversationId;
+        public bool Failed;
         public bool Rtl = rtl, Starting, Closed, Finished, Dirty = true, Follow = true, AwaitingLaunch;
         public int Columns = 80, Rows = 24;
         public TerminalBuffer Buffer = new(80, 24);
@@ -56,7 +60,7 @@ public sealed partial class MainWindow : Window
         Title = "Satr"; Width = 1220; Height = 820; MinWidth = 680; MinHeight = 540;
         Icon = new WindowIcon(Avalonia.Platform.AssetLoader.Open(new Uri("avares://Satr/Satr.ico")));
         Ui.Paint(this); FontSize = 13;
-        var fresh = Ui.Ghost("New", () => { }, "New session — Ctrl+Shift+T for shell, Ctrl+Shift+P for all types");
+        var fresh = Ui.Ghost(Ui.L("New"), () => { }, "New session — Ctrl+Shift+T for shell, Ctrl+Shift+P for all types");
         fresh.ContextMenu = BuildNewSessionMenu();
         fresh.Click += (_, _) =>
         {
@@ -64,26 +68,27 @@ public sealed partial class MainWindow : Window
             FillNewSessionMenu(menu);
             menu.Open(fresh);
         };
-        var more = Ui.Ghost("More", () => { }, "Copy, paste, settings, and the rest");
+        var more = Ui.Ghost(Ui.L("More"), () => { }, "Copy, paste, settings, and the rest");
         var menu = new ContextMenu();
-        menu.Items.Add(Item("Copy selection", CopySelection));
-        menu.Items.Add(Item("Paste into terminal", Paste));
+        menu.Items.Add(Item(Ui.L("Copy selection"), CopySelection));
+        menu.Items.Add(Item(Ui.L("Paste into terminal"), Paste));
         menu.Items.Add(Item("Search — Ctrl+Shift+F", OpenSearch));
         menu.Items.Add(Item("Command palette — Ctrl+Shift+P", ShowPalette));
-        menu.Items.Add(Item("Readable transcript", ShowTranscript));
-        menu.Items.Add(Item("Paste image as file path", PasteImage));
-        menu.Items.Add(Item("Copy folder path", CopyPath));
-        menu.Items.Add(Item("Open folder", OpenPath));
+        menu.Items.Add(Item(Ui.L("Readable transcript"), ShowTranscript));
+        menu.Items.Add(Item(Ui.L("Paste image as file path"), PasteImage));
+        menu.Items.Add(Item(Ui.L("Copy folder path"), CopyPath));
+        menu.Items.Add(Item(Ui.L("Open folder"), OpenPath));
         menu.Items.Add(new Separator());
-        menu.Items.Add(Item("Reopen finished session", RestartActive));
-        menu.Items.Add(Item("Rename session", RenameActive));
-        menu.Items.Add(Item("Move session up", () => MoveTab(-1)));
-        menu.Items.Add(Item("Move session down", () => MoveTab(1)));
+        menu.Items.Add(Item(Ui.L("Reopen finished session"), RestartActive));
+        menu.Items.Add(Item(Ui.L("Rename session"), RenameActive));
+        menu.Items.Add(Item(Ui.L("Move session up"), () => MoveTab(-1)));
+        menu.Items.Add(Item(Ui.L("Move session down"), () => MoveTab(1)));
         menu.Items.Add(new Separator());
         more.ContextMenu = menu;
         more.Click += (_, _) => menu.Open(more);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
-        actions.Children.Add(Ui.Ghost("Search", OpenSearch, "Search output — Ctrl+Shift+F"));
+        actions.Children.Add(Ui.Ghost(Ui.L("Search"), OpenSearch, "Search output — Ctrl+Shift+F"));
+        actions.Children.Add(_restartButton = Ui.Ghost(Ui.L("Restart"), RestartActive, "Start or reopen this session"));
         actions.Children.Add(more);
         var heading = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
         heading.Children.Add(_sessionTitle);
@@ -146,6 +151,10 @@ public sealed partial class MainWindow : Window
         _sidebar = BuildSidebar(fresh);
         _shell.Children.Add(_sidebar);
         Grid.SetColumn(root, 1); _shell.Children.Add(root);
+        var resizeSidebar = new Avalonia.Controls.Primitives.Thumb { Width = 5, HorizontalAlignment = HorizontalAlignment.Right, Cursor = new Cursor(StandardCursorType.SizeWestEast) };
+        resizeSidebar.DragDelta += (_, e) => { _sidebarWidth = Math.Clamp(_sidebarWidth + e.Vector.X, 200, 400); UpdateSidebarWidth(); };
+        resizeSidebar.DragCompleted += (_, _) => Persist();
+        ToolTip.SetTip(resizeSidebar, "Drag to resize sidebar"); _shell.Children.Add(resizeSidebar);
         Content = _shell;
         SizeChanged += (_, _) => UpdateSidebarWidth();
         _tabStrip.SelectionChanged += (_, _) => { if (!_loading && _tabStrip.SelectedItem is ListBoxItem { Tag: Tab tab }) Select(tab); };
@@ -225,21 +234,21 @@ public sealed partial class MainWindow : Window
             ("Jump to previous command — Ctrl+Shift+Up", () => JumpPrompt(-1)),
             ("Jump to next command — Ctrl+Shift+Down", () => JumpPrompt(1)),
             ("Search terminal", OpenSearch),
-            ("Readable transcript", ShowTranscript),
-            ("Copy selection", CopySelection),
-            ("Paste into terminal", Paste),
+            (Ui.L("Readable transcript"), ShowTranscript),
+            (Ui.L("Copy selection"), CopySelection),
+            (Ui.L("Paste into terminal"), Paste),
             ("Paste image as path", PasteImage),
             ("Copy session path", CopyPath),
             ("Open session folder", OpenPath),
-            ("Start or reopen session", RestartActive),
-            ("Rename session", RenameActive),
+            (Ui.L("Start or reopen session"), RestartActive),
+            (Ui.L("Rename session"), RenameActive),
             ("Duplicate session", () => { if (_active is { } t) AddTab(t.Profile, t.Project, "", t.Rtl, project: t.Project); }),
-            ("Move session up", () => MoveTab(-1)),
-            ("Move session down", () => MoveTab(1)),
+            (Ui.L("Move session up"), () => MoveTab(-1)),
+            (Ui.L("Move session down"), () => MoveTab(1)),
             ("Increase font", () => ChangeFont(1)),
             ("Decrease font", () => ChangeFont(-1)),
-            ("Settings", ShowSettings),
-            ("Keyboard shortcuts", ShowShortcuts),
+            (Ui.L("Settings"), ShowSettings),
+            (Ui.L("Keyboard shortcuts"), ShowShortcuts),
         ]);
         void Refresh()
         {
@@ -278,6 +287,7 @@ public sealed partial class MainWindow : Window
     }
     private void StatusError(string text)
     {
+        LogError(text);
         _lastErrorTick = Environment.TickCount64;
         _status.Foreground = Ui.Danger; _status.Text = text;
         _errorClear.Stop(); _errorClear.Start();
@@ -326,26 +336,32 @@ public sealed partial class MainWindow : Window
             _terminal.FontSize = double.IsFinite(state.FontSize) ? Math.Clamp(state.FontSize, 10, 32) : 16;
             _smartRtl = state.SmartRtl;
             if (!string.IsNullOrWhiteSpace(state.FontFamily) && state.FontFamily.Length <= 256 && IsMonospaceFont(state.FontFamily))
-                _terminal.FontFamily = new FontFamily(state.FontFamily);
+                _terminal.FontFamily = Ui.TerminalFont(state.FontFamily);
             _scrollbackRows = state.ScrollbackRows is 2000 or 5000 or 10000 ? state.ScrollbackRows : 5000;
-            RestoreWindow(state);
+            _projects.AddRange(state.Projects ?? []);
+            _sidebarHidden = state.SidebarHidden;
+            _sidebarWidth = double.IsFinite(state.SidebarWidth) ? Math.Clamp(state.SidebarWidth, 200, 400) : 256;
+            _saveTranscripts = state.SaveTranscripts;
+            _shortcuts = ValidateShortcuts(state.Shortcuts);
+            RestoreWindow(state); UpdateSidebarWidth();
             MeasureFont();
             foreach (var tab in state.Tabs)
-                AddTab(ResumeOf(tab.Profile), tab.Directory, tab.Draft, tab.RightToLeft, tab.Title, tab.Project);
+                AddTab(ResumeOf(tab.Profile), tab.Directory, tab.Draft, tab.RightToLeft, tab.Title, tab.Project, tab.Transcript, tab.ConversationId);
+            RefreshProjectGroups();
             if (_tabs.Count > 0) _tabStrip.SelectedItem = _tabs[Math.Clamp(state.SelectedTab, 0, _tabs.Count - 1)].Header;
             _saveEnabled = true;
             _restoredFromBackup = read.FromBackup;
         }
         catch (Exception ex) { StatusError("Restore failed. Auto-save is off to protect the original file. " + ex.Message); }
         finally { _loading = false; }
-        if (_tabs.Count == 0) AddTab("Shell");
+        if (_tabs.Count == 0 && _projects.Count == 0) AddTab("Shell");
         else if (_tabStrip.SelectedItem is ListBoxItem { Tag: Tab tab }) Select(tab);
         if (_restoredFromBackup)
             Status("Workspace recovered from a backup copy. Ctrl+Shift+R launches a tab.");
-        MeasureFont(); _render.Start();
+        RefreshChrome(); MeasureFont(); _render.Start();
     }
 
-    private void AddTab(string profile, string? directory = null, string draft = "", bool rtl = true, string? title = null, string? project = null)
+    private void AddTab(string profile, string? directory = null, string draft = "", bool rtl = true, string? title = null, string? project = null, string transcript = "", string? conversationId = null)
     {
         if (_instanceLock is null) return;
         if (_tabs.Count >= 50) { StatusError("Maximum 50 tabs."); return; }
@@ -360,7 +376,7 @@ public sealed partial class MainWindow : Window
         var cwd = directory ?? _directory;
         var tab = new Tab(profile, cwd, draft, rtl)
         {
-            CustomTitle = title,
+            CustomTitle = title, Transcript = transcript, ConversationId = conversationId,
             Project = string.IsNullOrWhiteSpace(project) ? cwd : project,
             AwaitingLaunch = _loading
         };
@@ -392,14 +408,16 @@ public sealed partial class MainWindow : Window
         var entry = new StackPanel(); entry.Children.Add(tab.ProjectHeading); entry.Children.Add(row);
         tab.Header = new ListBoxItem { Content = entry, Tag = tab };
         var tabMenu = new ContextMenu();
-        tabMenu.Items.Add(Item("Rename session", () => RenameTab(tab)));
-        tabMenu.Items.Add(Item("Duplicate session in same folder", () => AddTab(tab.Profile, tab.Project, "", tab.Rtl, project: tab.Project)));
-        tabMenu.Items.Add(Item("Copy folder path", () => CopyDirectory(tab.Directory)));
-        tabMenu.Items.Add(Item("Open folder", () => OpenDirectory(tab.Directory)));
-        tabMenu.Items.Add(Item("Start or reopen session", () => Restart(tab)));
-        tabMenu.Items.Add(Item("Force-kill session", () => ForceKill(tab)));
+        tabMenu.Items.Add(Item(Ui.L("Rename session"), () => RenameTab(tab)));
+        tabMenu.Items.Add(Item(Ui.L("Duplicate session in same folder"), () => AddTab(tab.Profile, tab.Project, "", tab.Rtl, project: tab.Project)));
+        tabMenu.Items.Add(Item(Ui.L("Copy folder path"), () => CopyDirectory(tab.Directory)));
+        tabMenu.Items.Add(Item(Ui.L("Open folder"), () => OpenDirectory(tab.Directory)));
+        tabMenu.Items.Add(Item(Ui.L("Start or reopen session"), () => Restart(tab)));
+        if (ToolFor(profile) is "codex" or "omp") tabMenu.Items.Add(Item(Ui.L("Bind conversation ID…"), () => BindConversation(tab)));
+        tabMenu.Items.Add(Item(Ui.L("Force-kill session"), () => ForceKill(tab)));
         tab.Header.ContextMenu = tabMenu;
         UpdateTab(tab);
+        RememberProject(tab.Project);
         _tabs.Add(tab);
         RefreshProjectGroups();
         RefreshChrome();
@@ -462,31 +480,27 @@ public sealed partial class MainWindow : Window
         if (ReferenceEquals(_active, tab)) Status("Starting session…");
         try
         {
-            var session = await PtySession.Start(tab.Profile, LaunchDirectory(tab.Profile, tab.Project, tab.Directory), tab.Columns, tab.Rows, _shutdown.Token);
+            var session = await PtySession.Start(tab.Profile, LaunchDirectory(tab.Profile, tab.Project, tab.Directory), tab.Columns, tab.Rows, _shutdown.Token, tab.ConversationId);
             if (_closed || _closing || tab.Closed) { await session.DisposeAsync(); return; }
             tab.Session = session;
-            session.Warning += message => Dispatcher.UIThread.Post(() =>
-            {
-                if (tab.Session == session && !tab.Closed && !_closed) StatusError(message);
-            });
-            session.Output += text =>
+            session.Output += async text =>
             {
                 TerminalSnapshot snapshot;
                 lock (tab) { snapshot = tab.Buffer.Process(text); tab.Snapshot = snapshot; tab.Dirty = true; }
-                if (snapshot.Responses.Count > 0) session.WriteResponses(snapshot.Responses);
+                if (snapshot.Responses.Count > 0) await session.WriteResponsesAsync(snapshot.Responses);
             };
             session.Ended += message => Dispatcher.UIThread.Post(() =>
             {
                 if (tab.Session != session || tab.Closed || _closed) return;
-                tab.Finished = true; tab.State = message; UpdateTab(tab);
-                if (ReferenceEquals(_active, tab)) StatusError(message + " — Ctrl+Shift+R to reopen.");
+                tab.Finished = true; tab.Failed = !message.StartsWith("Session ended", StringComparison.Ordinal); tab.State = message; UpdateTab(tab);
+                if (ReferenceEquals(_active, tab)) { if (tab.Failed) StatusError(message); else Status(message); }
             });
             session.ReadOutput();
             session.Resize(tab.Columns, tab.Rows);
             tab.State = "Running"; UpdateTab(tab);
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { tab.Finished = true; tab.State = "Failed to start: " + ex.Message; UpdateTab(tab); if (ReferenceEquals(_active, tab)) StatusError(tab.State); }
+        catch (Exception ex) { tab.Finished = true; tab.Failed = true; tab.State = "Failed to start: " + ex.Message; UpdateTab(tab); if (ReferenceEquals(_active, tab)) StatusError(tab.State); }
         finally { tab.Starting = false; UpdateTab(tab); }
     }
 
@@ -498,18 +512,20 @@ public sealed partial class MainWindow : Window
         try
         {
             WorkspaceStore.Save(WorkspaceStore.StatePath, new SavedWorkspace(_tabs.Select(tab =>
-                new SavedTab(tab.Profile, tab.Directory, tab.Draft, tab.Rtl, tab.CustomTitle, tab.Project)).ToArray(), Math.Max(0, _tabs.IndexOf(_active!)), _terminal.FontSize, _smartRtl,
-                _terminal.FontFamily.Name, _normalWidth, _normalHeight, _normalPosition?.X, _normalPosition?.Y, WindowState == WindowState.Maximized, _scrollbackRows, WorkspaceStore.CurrentSchema));
+                new SavedTab(tab.Profile, tab.Directory, tab.Draft, tab.Rtl, tab.CustomTitle, tab.Project, SavedTranscript(tab), tab.ConversationId)).ToArray(), Math.Max(0, _tabs.IndexOf(_active!)), _terminal.FontSize, _smartRtl,
+                _terminal.FontFamily.Name, _normalWidth, _normalHeight, _normalPosition?.X, _normalPosition?.Y, WindowState == WindowState.Maximized, _scrollbackRows, WorkspaceStore.CurrentSchema, _projects.ToArray(), _sidebarHidden, _sidebarWidth, _saveTranscripts, Ui.Arabic, _shortcuts));
             return true;
         }
         catch (Exception ex) { StatusError("Could not save sessions; check disk space and data-folder permissions. " + ex.Message); return false; }
     }
 
-    private async void CloseTab(Tab tab)
+    private async void CloseTab(Tab tab) => await CloseTabAsync(tab);
+
+    private async Task CloseTabAsync(Tab tab, bool confirmed = false)
     {
-        if (!tab.Finished && tab.Session is not null)
+        if (!confirmed && !tab.Finished && tab.Session is not null)
         {
-            if (!await Confirm($"Close a running tab?\n{tab.Directory}\nThe session stops immediately.", "Close")) return;
+            if (!await Confirm($"Close a running tab?\n{tab.Directory}\nThe session stops immediately.", Ui.L("Close"))) return;
         }
         SaveActive();
         try
@@ -551,13 +567,13 @@ public sealed partial class MainWindow : Window
 
     private static async Task<bool> Confirm(string text, string ok)
     {
-        var dialog = new Window { Title = "Confirm", Width = 420, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
+        var dialog = new Window { Title = Ui.L("Confirm"), Width = 420, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
         Ui.Paint(dialog);
         var done = false;
         var panel = new StackPanel { Margin = new Thickness(20), Spacing = 16 };
         panel.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap });
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
-        row.Children.Add(Button("Cancel", () => dialog.Close()));
+        row.Children.Add(Button(Ui.L("Cancel"), () => dialog.Close()));
         row.Children.Add(Button(ok, () => { done = true; dialog.Close(); }));
         panel.Children.Add(row); dialog.Content = panel;
         var owner = (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.MainWindow;
@@ -637,10 +653,10 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Project folder", AllowMultiple = false });
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = Ui.L("Project folder"), AllowMultiple = false });
             if (folders.FirstOrDefault()?.TryGetLocalPath() is not { } directory) return;
-            _directory = directory;
-            OfferSession(await ChooseProfile() ?? "Shell");
+            _directory = directory; RememberProject(directory); RefreshProjectGroups(); RefreshChrome(); Persist();
+            if (await ChooseProfile() is { } chosen) OfferSession(chosen);
         }
         catch (Exception ex) { StatusError(ex.Message); }
     }
@@ -678,8 +694,8 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(note);
         panel.Children.Add(state);
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
-        row.Children.Add(Button("Close", () => dialog.Close()));
-        row.Children.Add(Button("Check again", () =>
+        row.Children.Add(Button(Ui.L("Close"), () => dialog.Close()));
+        row.Children.Add(Button(Ui.L("Check again"), () =>
         {
             if (IsLaunchable(profile)) { dialog.Close(); AddTab(profile); }
             else RefreshState();
@@ -690,7 +706,7 @@ public sealed partial class MainWindow : Window
     }
     private static async Task<string?> ChooseProfile()
     {
-        var dialog = new Window { Title = "Session type", Width = 380, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
+        var dialog = new Window { Title = Ui.L("Session type"), Width = 380, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
         Ui.Paint(dialog);
         string? picked = null;
         var panel = new StackPanel { Margin = new Thickness(20), Spacing = 10 };
@@ -702,7 +718,7 @@ public sealed partial class MainWindow : Window
             var label = presence == ToolPresence.Installed ? def.PickerLabel : def.PickerLabel + " — Available (setup)";
             panel.Children.Add(Button(label, () => { picked = def.Id; dialog.Close(); }));
         }
-        panel.Children.Add(Button("Cancel", () => dialog.Close()));
+        panel.Children.Add(Button(Ui.L("Cancel"), () => dialog.Close()));
         dialog.Content = panel;
         var owner = (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.MainWindow;
         if (owner is not null) await dialog.ShowDialog(owner); else dialog.Show();
@@ -775,8 +791,9 @@ public sealed partial class MainWindow : Window
     {
         var snapshot = _active?.Buffer.CaptureSnapshot();
         var text = snapshot is null ? "" : string.Join(Environment.NewLine, snapshot.Lines.Select(line => string.Concat(line.Runs.Where(run => !run.Style.Hidden).Select(run => run.Text))));
+        if (_active is { Transcript.Length: > 0 } saved) text = "Previous saved output\n" + saved.Transcript + "\n\nCurrent session\n" + text;
         var box = new TextBox { Text = text, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(16) };
-        var find = new TextBox { PlaceholderText = "Filter text…", Margin = new Thickness(16, 0) };
+        var find = new TextBox { PlaceholderText = Ui.L("Filter text…"), Margin = new Thickness(16, 0) };
         find.TextChanged += (_, _) =>
         {
             var q = find.Text ?? "";
@@ -784,8 +801,8 @@ public sealed partial class MainWindow : Window
             box.Text = string.Join(Environment.NewLine, text.Split('\n').Where(l => l.Contains(q, StringComparison.OrdinalIgnoreCase)));
         };
         var bar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(16, 8) };
-        bar.Children.Add(Button("Copy all", () => { if (Clipboard is { } cb) cb.SetTextAsync(box.SelectedText.Length > 0 ? box.SelectedText : box.Text); }));
-        bar.Children.Add(Button("Wrap text", () => box.TextWrapping = box.TextWrapping == TextWrapping.Wrap ? TextWrapping.NoWrap : TextWrapping.Wrap));
+        bar.Children.Add(Button(Ui.L("Copy all"), () => { if (Clipboard is { } cb) cb.SetTextAsync(box.SelectedText.Length > 0 ? box.SelectedText : box.Text); }));
+        bar.Children.Add(Button(Ui.L("Wrap text"), () => box.TextWrapping = box.TextWrapping == TextWrapping.Wrap ? TextWrapping.NoWrap : TextWrapping.Wrap));
         var layout = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto") };
         layout.Children.Add(find);
         Grid.SetRow(bar, 1); layout.Children.Add(bar);
@@ -803,34 +820,14 @@ public sealed partial class MainWindow : Window
     {
         if (_searchPanel.IsVisible && e.Key == Key.Escape) { CloseSearch(); e.Handled = true; return; }
         if (_searchPanel.IsVisible && e.Key == Key.F3) { FindText(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1); e.Handled = true; return; }
-        if ((e.KeyModifiers & KeyModifiers.Control) == 0) return;
-        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-        if (shift && e.Key == Key.P) { ShowPalette(); e.Handled = true; }
-        else if (shift && e.Key == Key.F) { OpenSearch(); e.Handled = true; }
-        else if (shift && e.Key == Key.R) { RestartActive(); e.Handled = true; }
-        else if (shift && e.Key == Key.PageUp) { MoveTab(-1); e.Handled = true; }
-        else if (shift && e.Key == Key.PageDown) { MoveTab(1); e.Handled = true; }
-        else if (shift && e.Key == Key.T) { AddTab("Shell"); e.Handled = true; }
-        else if (shift && e.Key == Key.Up) { JumpPrompt(-1); e.Handled = true; }
-        else if (shift && e.Key == Key.Down) { JumpPrompt(1); e.Handled = true; }
-        else if (e.Key == Key.Tab && _tabs.Count > 0) { _tabStrip.SelectedIndex = (_tabStrip.SelectedIndex + (shift ? _tabs.Count - 1 : 1)) % _tabs.Count; e.Handled = true; }
-        else if (shift && e.Key == Key.W && _active is { } tab) { CloseTab(tab); e.Handled = true; }
-        else if (!shift && e.Key is >= Key.D1 and <= Key.D8) { var i = e.Key - Key.D1; if (i < _tabs.Count) { _tabStrip.SelectedIndex = i; e.Handled = true; } }
-        else if (!shift && e.Key is Key.OemPlus or Key.Add) { ChangeFont(1); e.Handled = true; }
-        else if (!shift && e.Key is Key.OemMinus or Key.Subtract) { ChangeFont(-1); e.Handled = true; }
+        if (RunShortcut(e)) { e.Handled = true; return; }
+        if (e.KeyModifiers == KeyModifiers.Control && e.Key is >= Key.D1 and <= Key.D8)
+        { var index = e.Key - Key.D1; if (index < _tabs.Count) ActivateSession(_tabs[index]); e.Handled = true; }
     }
     private void TerminalKey(object? sender, KeyEventArgs e)
     {
         if (e.Handled) return;
         var control = e.KeyModifiers.HasFlag(KeyModifiers.Control); var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-        if (control && shift && e.Key == Key.C) { CopySelection(); e.Handled = true; return; }
-        if (control && e.Key == Key.V) { Paste(); e.Handled = true; return; }
-        if (control && shift && e.Key == Key.A) { _terminal.SelectAll(); e.Handled = true; return; }
-        if (control && shift && e.Key is Key.Up or Key.Down)
-        {
-            JumpPrompt(e.Key == Key.Up ? -1 : 1); e.Handled = true; return;
-        }
-        if (control && !shift && e.Key is Key.OemPlus or Key.Add or Key.OemMinus or Key.Subtract) return; // handled by global zoom
         if (_searchPanel.IsVisible && e.Key == Key.Escape) return; // handled by GlobalKey
         if (control && (e.Key is >= Key.A and <= Key.Z || e.Key == Key.Space))
         {

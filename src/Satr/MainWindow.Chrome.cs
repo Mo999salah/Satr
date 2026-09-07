@@ -10,9 +10,11 @@ public sealed partial class MainWindow
     private readonly Grid _shell = new();
     private Border _sidebar = new();
     private bool _sidebarHidden;
+    private double _sidebarWidth = 256;
+    private Button _restartButton = new();
     private static readonly StringComparer ProjectComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
     private Button _rtlIndicator = new();
-    private readonly TextBlock _sessionTitle = new() { Text = "Workspace", FontSize = 15, FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly TextBlock _sessionTitle = new() { Text = Ui.L("Workspace"), FontSize = 15, FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly TextBlock _sessionSubtitle = new() { Text = "Project terminal", FontSize = 12, Foreground = Ui.Muted, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly TextBlock _sessionCount = new() { Foreground = Ui.Muted, FontSize = 12 };
     private readonly Border _welcome = new() { Background = Ui.Terminal, IsVisible = false };
@@ -31,23 +33,23 @@ public sealed partial class MainWindow
         wordmark.Children.Add(new TextBlock { Text = "سطر", FontSize = 25, FontWeight = FontWeight.SemiBold });
         wordmark.Children.Add(new TextBlock { Text = "Satr", FontSize = 15, Foreground = Ui.Muted, VerticalAlignment = VerticalAlignment.Center });
         top.Children.Add(wordmark);
-        fresh.Content = "+   New session";
+        fresh.Content = Ui.L("+   New session");
         fresh.HorizontalAlignment = HorizontalAlignment.Stretch;
         fresh.HorizontalContentAlignment = HorizontalAlignment.Left;
         fresh.Background = Ui.Surface;
         top.Children.Add(fresh);
-        var commands = Ui.Ghost("Commands", ShowPalette, "Ctrl+Shift+P");
+        var commands = Ui.Ghost(Ui.L("Commands"), ShowPalette, "Ctrl+Shift+P");
         commands.HorizontalAlignment = HorizontalAlignment.Stretch;
         commands.HorizontalContentAlignment = HorizontalAlignment.Left;
         top.Children.Add(commands);
-        var folder = Ui.Ghost("Open project…", async () => await ChooseDirectory());
+        var folder = Ui.Ghost(Ui.L("Open project…"), async () => await ChooseDirectory());
         folder.HorizontalAlignment = HorizontalAlignment.Stretch;
         folder.HorizontalContentAlignment = HorizontalAlignment.Left;
         top.Children.Add(folder);
         _sessionCount.Margin = new Thickness(10, 14, 0, 0);
         top.Children.Add(_sessionCount);
         var bottom = new StackPanel { Spacing = 4, Margin = new Thickness(14, 12) };
-        var settings = Ui.Ghost("Settings", ShowSettings);
+        var settings = Ui.Ghost(Ui.L("Settings"), ShowSettings);
         settings.HorizontalAlignment = HorizontalAlignment.Stretch;
         settings.HorizontalContentAlignment = HorizontalAlignment.Left;
         bottom.Children.Add(settings);
@@ -80,12 +82,12 @@ public sealed partial class MainWindow
         return _welcome;
     }
 
-    private void ToggleSidebar() { _sidebarHidden = !_sidebarHidden; UpdateSidebarWidth(); }
+    private void ToggleSidebar() { _sidebarHidden = !_sidebarHidden; UpdateSidebarWidth(); Persist(); }
     private void UpdateSidebarWidth()
     {
         if (_shell.ColumnDefinitions.Count == 0) return;
         _sidebar.IsVisible = !_sidebarHidden;
-        _shell.ColumnDefinitions[0].Width = new GridLength(_sidebarHidden ? 0 : Bounds.Width < 960 ? 220 : 256);
+        _shell.ColumnDefinitions[0].Width = new GridLength(_sidebarHidden ? 0 : Math.Min(_sidebarWidth, Math.Max(200, Bounds.Width - 460)));
     }
 
     private static string ProjectName(string project)
@@ -104,12 +106,22 @@ public sealed partial class MainWindow
         try
         {
             _tabStrip.Items.Clear();
-            foreach (var project in _tabs.GroupBy(t => t.Project, ProjectComparer))
+            foreach (var project in _projects.OrderByDescending(p => p.Pinned))
             {
-                var first = true;
-                foreach (var tab in project)
+                var sessions = _tabs.Where(t => ProjectComparer.Equals(t.Project, project.Path)).ToArray();
+                if (sessions.Length == 0)
                 {
-                    tab.ProjectHeading.IsVisible = first; first = false;
+                    _tabStrip.Items.Add(new ListBoxItem { Content = ProjectHeader(project), Focusable = false });
+                    continue;
+                }
+                for (var i = 0; i < sessions.Length; i++)
+                {
+                    var tab = sessions[i];
+                    tab.ProjectHeading.Child = i == 0 ? ProjectHeader(project) : null;
+                    tab.ProjectHeading.Padding = new Thickness(0);
+                    tab.ProjectHeading.IsVisible = i == 0;
+                    ((StackPanel)tab.Header.Content!).Children[1].IsVisible = !project.Collapsed;
+                    tab.Header.IsVisible = !project.Collapsed || i == 0;
                     _tabStrip.Items.Add(tab.Header);
                 }
             }
@@ -120,17 +132,18 @@ public sealed partial class MainWindow
 
     private void RefreshChrome()
     {
-        _sessionCount.Text = $"Projects  ·  {_tabs.Select(t => t.Project).Distinct(ProjectComparer).Count()}";
+        _sessionCount.Text = $"Projects  ·  {_projects.Count}";
         _rtlIndicator.Content = _smartRtl ? "العربية · Smart RTL on" : "العربية · Smart RTL off";
-        _sessionTitle.Text = _active?.CustomTitle ?? (_active is null ? "Workspace" : ProfileCatalog.TabLabelOf(_active.Profile));
-        _sessionSubtitle.Text = _active?.Project ?? "Open a folder to work in";
+        _sessionTitle.Text = _active?.CustomTitle ?? (_active is null ? Ui.L("Workspace") : ProfileCatalog.TabLabelOf(_active.Profile));
+        _sessionSubtitle.Text = _active?.Project ?? Ui.L("Open a folder to work in");
         ToolTip.SetTip(_sessionSubtitle, _active?.Project);
+        _restartButton.IsVisible = _active is { Finished: true } or { AwaitingLaunch: true };
         _welcome.IsVisible = _active is null || _active.AwaitingLaunch;
         var tool = _active is null ? "" : ProfileCatalog.TabLabelOf(_active.Profile);
-        _welcomeTitle.Text = _active is null ? "No open sessions" : tool + " · Ready to start";
-        _welcomeText.Text = _active is null ? "Open a project folder, or start a shell in your current folder." :
-            "Launch " + tool + " in " + ProjectName(_active.Project) + ". Saved terminal output is not restored.";
-        _launch.Content = _active is null ? "+   New session" : "Start " + tool;
+        _welcomeTitle.Text = _active is null ? Ui.L("No open sessions") : tool + " · Ready to start";
+        _welcomeText.Text = _active is null ? Ui.L("Open a project folder, or start a shell in your current folder.") :
+            "Launch " + tool + " in " + ProjectName(_active.Project) + ". Previous output, when saved, is available from Readable transcript.";
+        _launch.Content = _active is null ? Ui.L("+   New session") : "Start " + tool;
         ToolTip.SetTip(_launch, "Start or reopen session — Ctrl+Shift+R");
     }
 }

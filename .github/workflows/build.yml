@@ -17,6 +17,17 @@ jobs:
         run: dotnet run --project tests/Satr.BufferTests/Satr.BufferTests.csproj -c Release
       - name: Port checks
         run: dotnet run --project tests/Satr.PortChecks/Satr.PortChecks.csproj -c Release
+      - name: Install Linux UI dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libfontconfig1 libx11-6 libice6 libsm6 libicu-dev
+      - name: Desktop smoke check (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        run: xvfb-run -a dotnet run --project tests/Satr.UiChecks -c Release
+      - name: Desktop smoke check (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: dotnet run --project tests/Satr.UiChecks -c Release
   publish:
     needs: test
     runs-on: windows-latest

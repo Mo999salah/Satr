@@ -90,13 +90,23 @@ internal static class ProfileCatalog
             ? def.PaletteLabel
             : def.PaletteLabel + " — Available (setup)";
 
-    public static LaunchPlan ResolveLaunch(string profile, Func<string, string?> find)
+    public static LaunchPlan ResolveLaunch(string profile, Func<string, string?> find, string? conversationId = null)
     {
         if (!IsKnown(profile)) throw new NotSupportedException($"Unsupported session profile: {profile}. Its saved metadata is retained.");
         if (Find(profile) is { Kind: ProfileKind.Agent, Executable: { } tool } def)
         {
             var app = find(tool) ?? throw new FileNotFoundException($"{tool} not found in PATH. Install it first, then reopen Satr.");
             var extra = def.Arguments;
+            if (!string.IsNullOrWhiteSpace(conversationId))
+            {
+                if (!Guid.TryParse(conversationId, out var id)) throw new ArgumentException("Conversation ID must be a UUID.");
+                extra = tool switch
+                {
+                    "codex" => ["resume", id.ToString()],
+                    "omp" => ["--resume", id.ToString()],
+                    _ => throw new NotSupportedException("Exact conversation binding is currently supported for Codex and Omp.")
+                };
+            }
             if (OperatingSystem.IsWindows() && (Path.GetExtension(app).Equals(".cmd", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(app).Equals(".bat", StringComparison.OrdinalIgnoreCase)))
             {
                 if (app.Contains('%') || app.Contains('"') || app.Any(char.IsControl))
