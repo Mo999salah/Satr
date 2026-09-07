@@ -15,7 +15,10 @@ var tests = new (string Name, Action Run)[]
     ("carriage return is immediate across reads", CarriageReturnIsImmediate),
     ("style changes preserve pending autowrap", StylePreservesWrap),
     ("status redraw clears old characters across reads", StatusRedraw),
-    ("wide characters can be erased and overwritten", WideErase)
+    ("wide characters can be erased and overwritten", WideErase),
+    ("Kitty keyboard flags do not restore the cursor", KittyKeyboardFlagsDoNotRestoreCursor),
+    ("OSC 8 hyperlinks attach to cells", Osc8HyperlinkAttachesToCells),
+    ("OSC 133 records prompt rows", Osc133RecordsPromptRows)
 };
 
 var failures = new List<string>();
@@ -188,6 +191,10 @@ static void PersianTextRemainsSmartRtl()
     Assert(spans.Any(span => span.IsRightToLeft) &&
         spans.Any(span => !span.IsRightToLeft),
         "mixed Persian/Latin direction spans were not preserved");
+    var originSpans = SmartRtl.GetDirectionalSpans(text, false);
+    Assert(originSpans.Any(span => span.IsRightToLeft) &&
+        originSpans.Any(span => !span.IsRightToLeft),
+        "LTR-origin mixed line lost RTL spans");
 }
 
 static void CarriageReturnIsImmediate()
@@ -225,12 +232,56 @@ static void StatusRedraw()
     Assert(Text(shortUpdate.CaptureSnapshot()).TrimEnd() == "Working", "DCH left duplicate W");
 }
 
+static void KittyKeyboardFlagsDoNotRestoreCursor()
+{
+    var buffer = new TerminalBuffer(40, 6);
+    buffer.Process("~/project main\r\n> this a test");
+    // Fish 4 sends CSI =0u / CSI =29u around every Backspace. Those are
+    // Kitty keyboard flags, not SCO restore-cursor (CSI u).
+    var snapshot = buffer.Process("\x1b[=0u\x1b[=29u\b\x1b[K\r\x1b[12C");
+    Assert(Text(snapshot).Contains("~/project main"),
+        "Kitty keyboard flags restored the cursor onto the prompt line and erased it");
+    Assert(snapshot.CursorRow == 1,
+        $"cursor jumped to row {snapshot.CursorRow} instead of staying on the input line");
+}
+
 static void WideErase()
 {
     var buffer = new TerminalBuffer(30, 6);
     buffer.Process("👨‍💻Working\r\x1b[2X");
     Assert(Text(buffer.CaptureSnapshot()).TrimEnd() == "  Working", "wide glyph was not erased");
     Assert(Text(buffer.Process("\rOK\x1b[K")).TrimEnd() == "OK", "wide redraw left stale text");
+}
+
+static void Osc8HyperlinkAttachesToCells()
+{
+    var buffer = new TerminalBuffer(40, 6);
+    var linked = buffer.Process("\x1b]8;;https://example.com\u0007click\x1b]8;;\u0007 plain");
+    var click = linked.Lines[0].Runs.First(run => run.Text.Contains("click", StringComparison.Ordinal));
+    Assert(click.Style.Hyperlink is not null &&
+        click.Style.Hyperlink.StartsWith("https://example.com", StringComparison.Ordinal),
+        "OSC 8 did not attach to written cells");
+    var plain = linked.Lines[0].Runs.First(run => run.Text.Contains("plain", StringComparison.Ordinal));
+    Assert(plain.Style.Hyperlink is null, "closed OSC 8 still tagged later text");
+
+    var reset = buffer.Process("\r\n\x1b]8;;https://example.com\u0007\x1b[31mred\x1b[0mstill\x1b]8;;\u0007");
+    var still = reset.Lines[1].Runs.First(run => run.Text.Contains("still", StringComparison.Ordinal));
+    Assert(still.Style.Hyperlink is not null, "SGR 0 cleared OSC 8 hyperlink");
+
+    var blocked = new TerminalBuffer(40, 4).Process("\x1b]8;;javascript:alert(1)\u0007x\x1b]8;;\u0007");
+    Assert(blocked.Lines[0].Runs.All(run => run.Style.Hyperlink is null),
+        "javascript: OSC 8 was accepted");
+}
+
+static void Osc133RecordsPromptRows()
+{
+    var buffer = new TerminalBuffer(40, 8);
+    buffer.Process("\x1b]133;A\u0007first\r\n");
+    buffer.Process("output\r\n");
+    var snapshot = buffer.Process("\x1b]133;A;click_events=1\u0007second");
+    Assert(snapshot.PromptRows.Count >= 2, $"expected two prompt marks, got {snapshot.PromptRows.Count}");
+    Assert(snapshot.PromptRows[0] == 0, "first OSC 133 A was not row 0");
+    Assert(snapshot.PromptRows[^1] > snapshot.PromptRows[0], "second OSC 133 A did not advance");
 }
 
 static string Text(TerminalSnapshot snapshot) => string.Join(
