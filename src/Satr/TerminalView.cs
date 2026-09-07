@@ -24,6 +24,8 @@ public sealed class TerminalView : ContentControl
     private readonly Dictionary<int, RowLayout> _layouts = [];
     private readonly Dictionary<TerminalColor, Brush> _brushes = [];
     private string _fontKey = string.Empty;
+    private string _searchQuery = "";
+    private int _searchOffset = -1;
     private static readonly Regex Links = new(@"(?i)\b(?:https?://|www\.)[^\s<>{}\[\]""']+", RegexOptions.Compiled);
     public event Action<Uri>? LinkRequested;
     public event Action<bool>? FollowChanged;
@@ -42,10 +44,12 @@ public sealed class TerminalView : ContentControl
     public TerminalView()
     {
         Focusable = true;
+        Avalonia.Automation.AutomationProperties.SetName(this, "Satr terminal — drag to select, Shift+drag while captured, Ctrl+Click for links");
+        ToolTip.SetTip(this, "Shift+drag selects while captured • Ctrl+Click opens links");
+        _surface = new Surface(this) { VerticalAlignment = VerticalAlignment.Top };
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
         VerticalContentAlignment = VerticalAlignment.Stretch;
 
-        _surface = new Surface(this) { VerticalAlignment = VerticalAlignment.Top };
         _scroll = new ScrollViewer
         {
             Content = _surface,
@@ -71,6 +75,12 @@ public sealed class TerminalView : ContentControl
         SizeChanged += (_, _) => { _layouts.Clear(); _surface.InvalidateVisual(); };
         _surface.PointerPressed += BeginSelection;
         _surface.PointerMoved += ExtendSelection;
+        _surface.PointerMoved += (_, e) =>
+        {
+            if ((e.KeyModifiers & KeyModifiers.Control) != 0 && LinkAt(e.GetPosition(_surface)) is not null)
+                Cursor = new Cursor(StandardCursorType.Hand);
+            else Cursor = Cursor.Default;
+        };
         _surface.PointerCaptureLost += (_, _) => _dragging = false;
         _surface.PointerReleased += (_, e) =>
         {
@@ -113,7 +123,7 @@ public sealed class TerminalView : ContentControl
 
     public void Clear()
     {
-        _snapshot = null;
+        _snapshot = null; ResetSearch();
         _layouts.Clear();
         _surface.Height = _lineHeight;
         ClearSelection();
@@ -121,6 +131,13 @@ public sealed class TerminalView : ContentControl
     }
 
     public void ScrollToVerticalOffset(double offset) => _scroll.Offset = new Vector(0, offset);
+    public void ScrollToEnd() => _scroll.ScrollToEnd();
+    public int FirstVisibleRow => _lineHeight <= 0 ? 0 : (int)(VerticalOffset / _lineHeight);
+    public void ScrollToRow(int row)
+    {
+        ScrollToVerticalOffset(Math.Max(0, row * _lineHeight - _lineHeight));
+        FollowChanged?.Invoke(false);
+    }
     public bool TryGetGridCell(PointerEventArgs e, out int x, out int y)
     {
         var point = e.GetPosition(_surface);
@@ -151,10 +168,47 @@ public sealed class TerminalView : ContentControl
             var text = Text(_snapshot.Lines[row]);
             var from = row == start.Row ? Math.Min(start.Offset, text.Length) : 0;
             var to = row == end.Row ? Math.Min(end.Offset, text.Length) : text.Length;
-            if (row > start.Row) result.AppendLine();
+            if (row > start.Row && !_snapshot.Lines[row].WrappedFromPrevious) result.AppendLine();
             result.Append(text[from..Math.Max(from, to)]);
         }
         return result.ToString();
+    }
+
+    public void ResetSearch() { _searchQuery = ""; _searchOffset = -1; }
+    public (int Index, int Count) Find(string query, int direction, bool matchCase = false)
+    {
+        if (_snapshot is null || query.Length == 0) { ResetSearch(); ClearSelection(); return (0, 0); }
+        var key = (matchCase ? "1" : "0") + query;
+        if (_searchQuery != key) { _searchQuery = key; _searchOffset = -1; }
+        var comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var text = new StringBuilder(); var starts = new int[_snapshot.Lines.Count];
+        for (var row = 0; row < starts.Length; row++)
+        {
+            if (row > 0 && !_snapshot.Lines[row].WrappedFromPrevious) text.Append('\n');
+            starts[row] = text.Length;
+            foreach (var run in _snapshot.Lines[row].Runs) text.Append(run.Style.Hidden ? new string(' ', run.Text.Length) : run.Text);
+        }
+        var content = text.ToString();
+        var count = 0; var chosen = -1; var chosenIndex = 0; var first = -1; var last = -1;
+        for (var offset = content.IndexOf(query, comparison); offset >= 0;
+             offset = content.IndexOf(query, offset + Math.Max(1, query.Length), comparison))
+        {
+            count++; if (first < 0) first = offset; last = offset;
+            if (direction > 0 ? chosen < 0 && offset > _searchOffset : _searchOffset < 0 || offset < _searchOffset)
+            { chosen = offset; chosenIndex = count; }
+        }
+        if (count == 0) { ClearSelection(); return (0, 0); }
+        if (chosen < 0) { chosen = direction > 0 ? first : last; chosenIndex = direction > 0 ? 1 : count; }
+        (int Row, int Offset) PositionAt(int offset)
+        {
+            var row = 0;
+            while (row + 1 < starts.Length && starts[row + 1] <= offset) row++;
+            return (row, Math.Min(offset - starts[row], Text(_snapshot.Lines[row]).Length));
+        }
+        _searchOffset = chosen; _anchor = PositionAt(chosen); _end = PositionAt(chosen + query.Length);
+        ScrollToVerticalOffset(Math.Max(0, _anchor.Value.Row * _lineHeight - _lineHeight));
+        FollowChanged?.Invoke(false); _surface.InvalidateVisual();
+        return (chosenIndex, count);
     }
 
     private ((int Row, int Offset) Start, (int Row, int Offset) End) SelectionRange()
@@ -174,6 +228,9 @@ public sealed class TerminalView : ContentControl
         var layout = Layout(row);
         var cell = layout.Cells.FirstOrDefault(cell => point.X >= cell.X && point.X < cell.X + cell.Width);
         if (cell is null || cell.Style.Hidden) return null;
+        if (!string.IsNullOrEmpty(cell.Style.Hyperlink) &&
+            Uri.TryCreate(cell.Style.Hyperlink, UriKind.Absolute, out var tagged))
+            return tagged;
         foreach (Match match in Links.Matches(layout.Text))
         {
             var address = match.Value.TrimEnd('.', ',', ';', ':', '!', '?', ')');
@@ -292,7 +349,10 @@ public sealed class TerminalView : ContentControl
             {
                 var cell = cells[i];
                 if (cell.Start < glyph.Start || cell.Start + cell.Length > glyph.Start + glyph.Text.Length || cell.Columns == 0) continue;
-                var bounds = formatted.BuildHighlightGeometry(new Point(0, 0), cell.Start - glyph.Start + 1, cell.Length)?.Bounds;
+                // FormattedText ranges are 0-based UTF-16. The old +1 overflowed count and crashed the render loop.
+                var start = cell.Start - glyph.Start;
+                if ((uint)start >= (uint)glyph.Text.Length || start + cell.Length > glyph.Text.Length) continue;
+                var bounds = formatted.BuildHighlightGeometry(new Point(0, 0), start, cell.Length)?.Bounds;
                 if (bounds is { Width: > 0 } box)
                     cells[i] = cell with { X = glyph.X + box.X * scale, Width = box.Width * scale };
             }
@@ -333,6 +393,14 @@ public sealed class TerminalView : ContentControl
         var top = VerticalOffset;
         using var viewportClip = dc.PushClip(new Rect(0, top, Math.Max(0, _scroll.Viewport.Width), Math.Max(0, _scroll.Viewport.Height)));
         dc.DrawRectangle(Background, null, new Rect(0, top, Math.Max(0, _scroll.Viewport.Width), Math.Max(0, _scroll.Viewport.Height)));
+        if (_snapshot.Lines.All(line => string.IsNullOrWhiteSpace(Text(line))))
+        {
+            // Fully blank = new session without output; show a hint instead of a black void.
+            var hint = new FormattedText("Waiting for output — Ctrl+Shift+T new session • Ctrl+Shift+F search",
+                CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+                new Typeface(FontFamily), 13, Brushes.Gray);
+            dc.DrawText(hint, new Point(12, top + 10));
+        }
         var first = Math.Max(0, (int)(top / _lineHeight));
         var last = Math.Min(_snapshot.Lines.Count, (int)Math.Ceiling((top + _scroll.Viewport.Height) / _lineHeight) + 1);
         foreach (var key in _layouts.Keys.Where(key => key < first || key >= last).ToArray()) _layouts.Remove(key);
@@ -395,14 +463,9 @@ public sealed class TerminalView : ContentControl
     {
         if (glyph.Formatted is { } cached) return cached;
         FormattedText formatted;
-            // The paragraph engine already resolved direction. Force its RTL run so
-            // Avalonia does not independently reorder overrides or isolates a second time.
-            var offset = glyph.Rtl ? 1 : 0;
-            var display = glyph.Rtl ? "\u202e" + string.Concat(glyph.Text.Select(c =>
-                c is >= '\u202a' and <= '\u202e' or >= '\u2066' and <= '\u2069' or '\u200e' or '\u200f' or '\u061c' ? '\u200b' : c)) + "\u202c" : glyph.Text;
-            formatted = new FormattedText(display, CultureInfo.CurrentCulture,
-                // RLO above determines run direction. A physical LTR paragraph keeps
-                // Avalonia drawing and highlight geometry in the same left-origin space.
+            // Keep terminal rows LTR. Avalonia shapes Arabic as an embedded RTL run
+            // without changing the row origin or adding bidi override characters.
+            formatted = new FormattedText(glyph.Text, CultureInfo.CurrentCulture,
                 FlowDirection.LeftToRight,
                 new Typeface(glyph.Text.EnumerateRunes().Any(rune => rune.Value >= 0x1f000)
                     ? new FontFamily(OperatingSystem.IsWindows() ? "Segoe UI Emoji" : "Noto Color Emoji") : FontFamily, glyph.Style.Italic ? FontStyle.Italic : FontStyle,
@@ -413,13 +476,16 @@ public sealed class TerminalView : ContentControl
                 var style = StyleAt(source, glyph.Start + index);
                 var end = index + 1;
                 while (end < glyph.Text.Length && StyleAt(source, glyph.Start + end) == style) end++;
-                formatted.SetForegroundBrush(BrushFor(Colors(style).Foreground), index + offset, end - index);
-                formatted.SetFontWeight(style.Bold ? FontWeight.Bold : FontWeight, index + offset, end - index);
-                formatted.SetFontStyle(style.Italic ? FontStyle.Italic : FontStyle, index + offset, end - index);
+                formatted.SetForegroundBrush(BrushFor(Colors(style).Foreground), index, end - index);
+                formatted.SetFontWeight(style.Bold ? FontWeight.Bold : FontWeight, index, end - index);
+                formatted.SetFontStyle(style.Italic ? FontStyle.Italic : FontStyle, index, end - index);
                 var decorations = new TextDecorationCollection();
-                if (style.Underline) decorations.Add(TextDecorations.Underline[0]);
+                if (style.Underline || !string.IsNullOrEmpty(style.Hyperlink))
+                    decorations.Add(TextDecorations.Underline[0]);
                 if (style.Strikethrough) decorations.Add(TextDecorations.Strikethrough[0]);
-                formatted.SetTextDecorations(decorations, index + offset, end - index);
+                formatted.SetTextDecorations(decorations, index, end - index);
+                if (!string.IsNullOrEmpty(style.Hyperlink))
+                    formatted.SetForegroundBrush(Brushes.CornflowerBlue, index, end - index);
                 index = end;
             }
             foreach (Match link in links)
@@ -427,8 +493,8 @@ public sealed class TerminalView : ContentControl
                 var start = Math.Max(glyph.Start, link.Index); var end = Math.Min(glyph.Start + glyph.Text.Length, link.Index + link.Length);
                 if (end <= start) continue;
                 if (glyph.Style.Hidden) continue;
-                formatted.SetForegroundBrush(Brushes.CornflowerBlue, start - glyph.Start + offset, end - start);
-                formatted.SetTextDecorations(TextDecorations.Underline, start - glyph.Start + offset, end - start);
+                formatted.SetForegroundBrush(Brushes.CornflowerBlue, start - glyph.Start, end - start);
+                formatted.SetTextDecorations(TextDecorations.Underline, start - glyph.Start, end - start);
             }
         return glyph.Formatted = formatted;
     }
@@ -524,4 +590,3 @@ public sealed class TerminalView : ContentControl
         return true;
     }
 }
-
