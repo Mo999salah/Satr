@@ -10,12 +10,46 @@ Check(MainWindow.TabTitle("AgyResume", "/work/app").Contains("Agy · resume"), "
 Check(MainWindow.TabTitle("OmpResume", "/work/app").Contains("Omp · resume"), "omp resumed session label");
 Check(MainWindow.IsAi("Omp") && !MainWindow.IsAi("Shell") && MainWindow.ToolFor("OmpResume") == "omp", "omp tool mapping");
 Check(MainWindow.ResumeOf("Omp") == "OmpResume" && MainWindow.FreshOf("OmpResume") == "Omp", "omp resume mapping");
+Check(string.Join(",", ProfileCatalog.All.Select(p => p.Id)) == "Shell,Codex,CodexResume,Claude,Agy,AgyResume,Omp,OmpResume", "catalog ids");
+Check(ProfileCatalog.IsKnown("Claude") && !ProfileCatalog.IsKnown("Mystery"), "catalog known set");
+Check(MainWindow.IsFreshAi("Claude") && !MainWindow.IsFreshAi("CodexResume") && !MainWindow.IsFreshAi("Shell"), "fresh agent mapping");
+Check(ProfileCatalog.TabLabelOf("CodexResume") == "Codex · resume", "catalog tab label");
+Check(ProfileCatalog.Presence("Shell", _ => null) == ToolPresence.Installed, "shell is always installed");
+Check(ProfileCatalog.Presence("Codex", _ => null) == ToolPresence.Available, "missing tool stays available");
+Check(ProfileCatalog.Presence("Codex", name => name == "codex" ? "/opt/codex" : null) == ToolPresence.Installed, "resolved tool is installed");
+Check(!ProfileCatalog.IsLaunchable("Codex", _ => null), "missing tool is not launchable");
+var availableCaption = ProfileCatalog.MenuCaption(ProfileCatalog.Find("Codex")!.Value, ToolPresence.Available);
+Check(availableCaption.Contains("Available", StringComparison.Ordinal) && availableCaption.Contains("setup", StringComparison.OrdinalIgnoreCase), "available menu offers setup");
+Check(ProfileCatalog.PaletteCaption(ProfileCatalog.Find("Codex")!.Value, ToolPresence.Installed) == "Session: new Codex", "installed palette label");
+var threw = false;
+try { ProfileCatalog.ResolveLaunch("Claude", _ => null); } catch (FileNotFoundException) { threw = true; }
+Check(threw, "launch plan requires PATH");
+var resumePlan = ProfileCatalog.ResolveLaunch("CodexResume", name => name == "codex" ? "/opt/codex" : null);
+Check(resumePlan.App == "/opt/codex" && resumePlan.Arguments is ["resume"], "resume args come from catalog");
+if (OperatingSystem.IsWindows())
+{
+    var wrapped = ProfileCatalog.ResolveLaunch("AgyResume", _ => @"C:\tools\agy.cmd");
+    Check(wrapped.App.EndsWith("cmd.exe", StringComparison.OrdinalIgnoreCase) && wrapped.Arguments is ["/D", "/V:OFF", "/S", "/C", "\"\"C:\\tools\\agy.cmd\" --continue\""], "windows wrapper preserves resolved path");
+}
+Check(MainWindow.ResolveProfile("Mystery", restoring: true) == "Mystery", "restore keeps unknown profiles");
+Check(MainWindow.ResolveProfile("Mystery", restoring: false) == "Shell", "interactive unknown profiles become shell");
+Check(MainWindow.ShouldCreateTab("Codex", restoring: true, available: false), "restore keeps unavailable AI tabs");
+Check(!MainWindow.ShouldCreateTab("Codex", restoring: false, available: false), "new session still requires the tool");
+Check(MainWindow.ShouldAutoStart("Shell", true) && !MainWindow.ShouldAutoStart("Codex", false), "missing tools do not auto-start");
+Check(!MainWindow.ShouldAutoStart("Shell", true, restored: true), "restored tabs wait for an explicit launch");
 Check(MainWindow.KeySequence(Key.Up, KeyModifiers.None, true) == "\x1bOA", "application cursor");
 Check(MainWindow.KeySequence(Key.Left, KeyModifiers.Control, false) == "\x1b[1;5D", "Ctrl+Left");
 Check(MainWindow.KeySequence(Key.F12, KeyModifiers.Shift, false) == "\x1b[24;2~", "Shift+F12");
 Check(ArabicInput.PreparePaste("hello\nCodex", true) == "\x1b[200~hello\nCodex\x1b[201~", "logical paste");
 try { ArabicInput.PreparePaste("a\nb", false); throw new Exception("unsafe paste accepted"); }
 catch (ArgumentException) { }
+Check(ImeComposition.BlocksPtyKey(true, false) && !ImeComposition.BlocksPtyKey(true, true), "IME holds keys except Ctrl");
+var bounded = System.Diagnostics.Stopwatch.StartNew();
+try { PtySession.AwaitBounded(Task.Delay(TimeSpan.FromSeconds(30)), TimeSpan.FromMilliseconds(80)).GetAwaiter().GetResult(); throw new Exception("timeout was hidden"); }
+catch (TimeoutException) { }
+Check(bounded.Elapsed < TimeSpan.FromSeconds(3), "PTY dispose wait stayed unbounded");
+try { ProfileCatalog.ResolveLaunch("Mystery", _ => throw new Exception("unknown profile probed PATH")); throw new Exception("unknown profile launched"); }
+catch (NotSupportedException) { }
 var temporary = Path.Combine(Path.GetTempPath(), "satr-check-" + Guid.NewGuid().ToString("N"));
 var previous = Environment.GetEnvironmentVariable("SATR_DATA_DIR");
 try
@@ -27,8 +61,31 @@ try
     WorkspaceStore.Save(WorkspaceStore.StatePath, state with { FontSize = 20 });
     File.WriteAllText(WorkspaceStore.StatePath, "invalid");
     var recovered = WorkspaceStore.LoadRecovering(WorkspaceStore.StatePath);
-    Check(recovered.FontSize == 19 && recovered.Tabs[0].Draft == "arabic draft", "atomic backup recovery");
+    Check(recovered.FromBackup && recovered.Workspace.FontSize == 19 && recovered.Workspace.Tabs[0].Draft == "arabic draft", "atomic backup recovery");
+    Check(recovered.Workspace.Tabs[0].Project == temporary, "legacy tabs fill project from directory");
+    Check(recovered.Workspace.SchemaVersion == WorkspaceStore.CurrentSchema, "schema version is filled on load");
     Check(Directory.GetFiles(temporary, "*.damaged-*").Length == 1, "damaged state retained");
+    File.WriteAllText(WorkspaceStore.StatePath, """{"Tabs":null}""");
+    var invalidRecovered = WorkspaceStore.LoadRecovering(WorkspaceStore.StatePath);
+    Check(invalidRecovered.FromBackup && invalidRecovered.Workspace.FontSize == 19 && invalidRecovered.Workspace.Tabs[0].Draft == "arabic draft", "invalid schema uses backup");
+    File.Delete(WorkspaceStore.StatePath);
+    var missingPrimary = WorkspaceStore.LoadRecovering(WorkspaceStore.StatePath);
+    Check(missingPrimary.FromBackup && missingPrimary.Workspace.Tabs[0].Draft == "arabic draft", "missing primary uses backup");
+    const string future = """{"SchemaVersion":99,"Tabs":[],"SelectedTab":0,"FutureData":"keep"}""";
+    File.WriteAllText(WorkspaceStore.StatePath, future);
+    try { WorkspaceStore.LoadRecovering(WorkspaceStore.StatePath); throw new Exception("future schema accepted or replaced by backup"); }
+    catch (NotSupportedException) { }
+    Check(File.ReadAllText(WorkspaceStore.StatePath) == future, "future workspace changed");
+    try { WorkspaceStore.Save(WorkspaceStore.StatePath, state with { SchemaVersion = 99 }); throw new Exception("future schema saved"); }
+    catch (NotSupportedException) { }
+    File.WriteAllText(WorkspaceStore.StatePath, """{"Tabs":[{"Profile":"Shell","Directory":"/work/app","Draft":"","RightToLeft":true}],"SelectedTab":0}""");
+    var legacy = WorkspaceStore.Load(WorkspaceStore.StatePath);
+    Check(legacy.SchemaVersion == WorkspaceStore.CurrentSchema && legacy.Tabs[0].Project == "/work/app", "unversioned json fills schema and project");
+    var projectDir = Path.Combine(temporary, "project"); var nested = Path.Combine(projectDir, "src");
+    Directory.CreateDirectory(nested);
+    Check(MainWindow.LaunchDirectory("Shell", projectDir, nested) == nested, "shell launches in session cwd");
+    Check(MainWindow.LaunchDirectory("Codex", projectDir, nested) == projectDir, "AI launches in project root");
+    Check(MainWindow.LaunchDirectory("Shell", projectDir, Path.Combine(temporary, "gone")) == projectDir, "missing cwd falls back to project");
 }
 finally
 {

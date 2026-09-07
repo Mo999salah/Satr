@@ -9,15 +9,15 @@ namespace Satr;
 /// <summary>Chrome tokens. Terminal cells stay on their own palette.</summary>
 internal static class Ui
 {
-    public static readonly Color ChromeColor = Color.Parse("#0F172A");
-    public static readonly Color TerminalColor = Color.Parse("#020617");
-    public static readonly Color SurfaceColor = Color.Parse("#111827");
-    public static readonly Color BorderColor = Color.Parse("#1E293B");
-    public static readonly Color TextColor = Color.Parse("#F8FAFC");
-    public static readonly Color MutedColor = Color.Parse("#94A3B8");
-    public static readonly Color AccentColor = Color.Parse("#22C55E");
-    public static readonly Color WarningColor = Color.Parse("#EAB308");
-    public static readonly Color DangerColor = Color.Parse("#F87171");
+    public static readonly Color ChromeColor = Color.Parse("#191919");
+    public static readonly Color TerminalColor = Color.Parse("#191919");
+    public static readonly Color SurfaceColor = Color.Parse("#242424");
+    public static readonly Color BorderColor = Color.Parse("#333333");
+    public static readonly Color TextColor = Color.Parse("#ECECEC");
+    public static readonly Color MutedColor = Color.Parse("#AAAAAA");
+    public static readonly Color AccentColor = Color.Parse("#A3D9B1");
+    public static readonly Color WarningColor = Color.Parse("#E5BC78");
+    public static readonly Color DangerColor = Color.Parse("#F28B82");
 
     public static readonly IBrush Chrome = new SolidColorBrush(ChromeColor);
     public static readonly IBrush Terminal = new SolidColorBrush(TerminalColor);
@@ -39,11 +39,13 @@ internal static class Ui
         var button = new Button
         {
             Content = text,
-            Padding = new Thickness(10, 5),
+            Padding = new Thickness(12, 8),
+            MinHeight = 36,
+            FontSize = 14,
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             Foreground = Text,
-            CornerRadius = new CornerRadius(6),
+            CornerRadius = new CornerRadius(8),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
         if (tip is not null) ToolTip.SetTip(button, tip);
@@ -65,6 +67,7 @@ internal static class Ui
         window.Background = Chrome;
         window.Foreground = Text;
         window.FontFamily = Interface;
+        window.FontSize = 14;
         window.FlowDirection = FlowDirection.LeftToRight;
     }
 }
