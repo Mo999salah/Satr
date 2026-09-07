@@ -27,16 +27,16 @@ internal sealed class PtySession : IAsyncDisposable
         if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
         string app;
         string[] args;
-        if (profile is "Codex" or "CodexResume" or "Claude")
+        if (profile is "Codex" or "CodexResume" or "Claude" or "Agy" or "AgyResume" or "Omp" or "OmpResume")
         {
-            var tool = profile == "Claude" ? "claude" : "codex";
-            app = FindExecutable(tool) ?? throw new FileNotFoundException($"{tool} غير موجود في PATH. ثبّته أولًا ثم أعد فتح Satr.");
-            args = profile == "CodexResume" ? ["resume"] : [];
+            var tool = profile == "Claude" ? "claude" : profile is "Agy" or "AgyResume" ? "agy" : profile is "Omp" or "OmpResume" ? "omp" : "codex";
+            app = FindExecutable(tool) ?? throw new FileNotFoundException($"{tool} not found in PATH. Install it first, then reopen Satr.");
+            args = profile == "CodexResume" ? ["resume"] : profile == "AgyResume" ? ["--continue"] : profile == "OmpResume" ? ["--continue"] : [];
             if (OperatingSystem.IsWindows() && Path.GetExtension(app) is ".cmd" or ".bat")
             {
                 // Only fixed tool names enter cmd syntax; the project path travels in Cwd.
                 app = Path.Combine(Environment.SystemDirectory, "cmd.exe");
-                args = ["/D", "/S", "/C", tool + (profile == "CodexResume" ? " resume" : "")];
+                args = ["/D", "/S", "/C", tool + (profile == "CodexResume" ? " resume" : profile is "AgyResume" or "OmpResume" ? " --continue" : "")];
             }
         }
         else if (OperatingSystem.IsWindows())
@@ -83,9 +83,9 @@ internal sealed class PtySession : IAsyncDisposable
 
     public void Write(string text)
     {
-        if (_disposed) throw new IOException("الجلسة مغلقة.");
-        if (text.Length > 1024 * 1024 + 32) throw new IOException("النص أكبر من حد اللصق 1 MB.");
-        if (!_input.Writer.TryWrite(Encoding.UTF8.GetBytes(text))) throw new IOException("الجلسة لا تستقبل المدخلات حاليًا. النص بقي في المحرر؛ حاول مجددًا.");
+        if (_disposed) throw new IOException("Session closed.");
+        if (text.Length > 1024 * 1024 + 32) throw new IOException("Text exceeds the 1 MB paste limit.");
+        if (!_input.Writer.TryWrite(Encoding.UTF8.GetBytes(text))) throw new IOException("Session not accepting input right now. This batch was not sent; try again.");
     }
 
     public void Resize(int columns, int rows) { if (!_disposed) _pty.Resize(columns, rows); }
@@ -101,7 +101,7 @@ internal sealed class PtySession : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { if (!_disposed) Ended?.Invoke("تعذّرت الكتابة: " + ex.Message); }
+        catch (Exception ex) { if (!_disposed) Ended?.Invoke("Write failed: " + ex.Message); }
     }
 
     private async Task ReadLoop()
@@ -118,10 +118,10 @@ internal sealed class PtySession : IAsyncDisposable
                 var length = decoder.GetChars(bytes, 0, count, chars, 0);
                 if (length > 0 && !_disposed) Output?.Invoke(new string(chars, 0, length));
             }
-            if (!_disposed) Ended?.Invoke("انتهت الجلسة — يمكنك فتح جلسة جديدة.");
+            if (!_disposed) Ended?.Invoke("Session ended — you can open a new session.");
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { if (!_disposed) Ended?.Invoke("توقّفت الجلسة: " + ex.Message); }
+        catch (Exception ex) { if (!_disposed) Ended?.Invoke("Session stopped: " + ex.Message); }
     }
 
     public async ValueTask DisposeAsync()
