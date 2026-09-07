@@ -47,6 +47,12 @@ class UiChecks : Application
                 rtlBox.IsChecked = !originalRtl;
                 Check((bool)Field(window, "_smartRtl") == originalRtl, "Settings edits must remain pending.");
                 Shot(settings, "settings-arabic");
+                var settingsNav = (ListBox)Field(window, "_settingsNavigation");
+                foreach (var section in new[] { 0, 3, 5, 6, 7 })
+                {
+                    settingsNav.SelectedIndex = section;
+                    await Task.Delay(100); Shot(settings, "settings-" + section);
+                }
                 settings.Close();
                 Check((bool)Field(window, "_smartRtl") == originalRtl, "Cancel must preserve settings.");
                 Call(window, "OpenSettings", 1);
@@ -81,6 +87,9 @@ class UiChecks : Application
                 await Task.Delay(1200);
                 var buffer = (TerminalBuffer)Field(Field(window, "_active"), "Buffer");
                 Check(TerminalBuffer.LogicalText(buffer.CaptureSnapshot()).Contains("Satr UI check"), "Shell output must reach the terminal.");
+                typeof(MainWindow).GetField("_saveTranscripts", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+                Call(window, "Persist");
+                Check(WorkspaceStore.Load(WorkspaceStore.StatePath).Tabs.Any(t => t.Transcript.Contains("Satr UI check")), "Opt-in transcript must persist output.");
                 Shot(window, "running-wide");
                 window.Width = 680; window.Height = 540;
                 await Task.Delay(500);
@@ -99,6 +108,10 @@ class UiChecks : Application
                 var active = Field(window, "_active");
                 await ((IAsyncDisposable)Field(active, "Session")).DisposeAsync();
                 File.WriteAllText(Path.Combine(Output, "result.txt"), "PASS: restored projects, selection, explicit launch, terminal output, narrow layout, sidebar toggle, PTY cleanup.");
+                var projectsBefore = WorkspaceStore.Load(WorkspaceStore.StatePath).Projects!.Length;
+                Call(window, "CloseTab", active);
+                await Task.Delay(300);
+                Check(WorkspaceStore.Load(WorkspaceStore.StatePath).Projects!.Length == projectsBefore, "Closing a session must preserve its project.");
                 Console.WriteLine("PASS " + Output);
                 desktop.Shutdown(0);
             }

@@ -13,9 +13,9 @@ namespace Satr;
 
 public sealed partial class MainWindow
 {
-    private readonly TextBox _search = new() { PlaceholderText = "Search session output", MinWidth = 160, MaxLength = 512 };
+    private readonly TextBox _search = new() { PlaceholderText = Ui.L("Search session output"), MinWidth = 160, MaxLength = 512 };
     private readonly TextBlock _searchResult = new() { VerticalAlignment = VerticalAlignment.Center };
-    private readonly CheckBox _matchCase = new() { Content = "Match case", VerticalAlignment = VerticalAlignment.Center };
+    private readonly CheckBox _matchCase = new() { Content = Ui.L("Match case"), VerticalAlignment = VerticalAlignment.Center };
     private readonly Border _searchPanel = new()
     {
         IsVisible = false,
@@ -44,9 +44,9 @@ public sealed partial class MainWindow
         var actions = new WrapPanel { Orientation = Orientation.Horizontal };
         actions.Children.Add(_searchResult);
         actions.Children.Add(_matchCase);
-        actions.Children.Add(Button("Previous", () => FindText(-1)));
-        actions.Children.Add(Button("Next", () => FindText(1)));
-        actions.Children.Add(Button("Close", CloseSearch));
+        actions.Children.Add(Button(Ui.L("Previous"), () => FindText(-1)));
+        actions.Children.Add(Button(Ui.L("Next"), () => FindText(1)));
+        actions.Children.Add(Button(Ui.L("Close"), CloseSearch));
         bar.Children.Add(_search); bar.Children.Add(actions);
         _searchDebounce.Tick += (_, _) => { _searchDebounce.Stop(); _terminal.ResetSearch(); FindText(1); };
         _search.TextChanged += (_, _) => { _searchDebounce.Stop(); _searchDebounce.Start(); };
@@ -96,9 +96,9 @@ public sealed partial class MainWindow
     {
         if (tab.Closed || _closed) return;
         var name = string.IsNullOrWhiteSpace(tab.CustomTitle) ? TabTitle(tab.Profile, tab.Project) : $"\u2068{tab.CustomTitle}\u2069";
-        tab.Pip.Background = tab.Finished ? Ui.Danger : tab.Starting ? Ui.Warning : tab.AwaitingLaunch ? Ui.Muted : Ui.Accent;
+        tab.Pip.Background = tab.Failed ? Ui.Danger : tab.Finished ? Ui.Muted : tab.Starting ? Ui.Warning : tab.AwaitingLaunch ? Ui.Muted : Ui.Accent;
         tab.Label.Text = string.IsNullOrWhiteSpace(tab.CustomTitle) ? ProfileCatalog.TabLabelOf(tab.Profile) : name;
-        tab.Detail.Text = ProfileCatalog.TabLabelOf(tab.Profile) + " · " + (tab.Finished ? "Ended" : tab.Starting ? "Starting" : tab.AwaitingLaunch ? "Ready" : "Running");
+        tab.Detail.Text = ProfileCatalog.TabLabelOf(tab.Profile) + " · " + (tab.Failed ? "Failed" : tab.Finished ? "Ended" : tab.Starting ? "Starting" : tab.AwaitingLaunch ? "Ready" : "Running");
         AutomationProperties.SetName(tab.Header, name + ", " + tab.State);
         ToolTip.SetTip(tab.Header, tab.Project + "\n" + tab.Directory + "\n" + tab.State + "\nRight-click: rename, folder, kill");
         if (ReferenceEquals(_active, tab)) Status(tab.State + " • " + tab.Profile);
@@ -109,12 +109,12 @@ public sealed partial class MainWindow
     private async void RenameTab(Tab tab)
     {
         var name = new TextBox { Text = tab.CustomTitle ?? "", PlaceholderText = "Session name; leave empty for automatic", MaxLength = 100 };
-        var dialog = new Window { Title = "Rename session", Width = 420, SizeToContent = SizeToContent.Height,
+        var dialog = new Window { Title = Ui.L("Rename session"), Width = 420, SizeToContent = SizeToContent.Height,
             WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = false };
         Ui.Paint(dialog);
         var panel = new StackPanel { Margin = new Thickness(20), Spacing = 12 };
         panel.Children.Add(name);
-        panel.Children.Add(Button("Save", () =>
+        panel.Children.Add(Button(Ui.L("Save"), () =>
         {
             var value = name.Text?.Trim();
             if (value?.Any(char.IsControl) == true) { StatusError("Name contains disallowed control characters."); return; }
@@ -155,7 +155,7 @@ public sealed partial class MainWindow
             lock (tab)
             {
                 tab.Buffer = new TerminalBuffer(tab.Columns, tab.Rows, _scrollbackRows);
-                tab.Snapshot = null; tab.Dirty = true; tab.Finished = false; tab.SynchronizedSince = 0;
+                tab.Snapshot = null; tab.Dirty = true; tab.Finished = false; tab.Failed = false; tab.SynchronizedSince = 0;
             }
             tab.Offset = 0; tab.Selection = (null, null); tab.Follow = true;
             if (_active == tab) { _terminal.Clear(); Render(); }

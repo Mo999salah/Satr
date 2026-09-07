@@ -14,8 +14,7 @@ internal sealed class PtySession : IAsyncDisposable
     private Task? _reader;
     private volatile bool _disposed;
     private Task? _disposeTask;
-    public event Action<string>? Warning;
-    public event Action<string>? Output;
+    public event Func<string, Task>? Output;
     public event Action<string>? Ended;
 
     private PtySession(IPtyConnection pty)
@@ -24,10 +23,10 @@ internal sealed class PtySession : IAsyncDisposable
         _writer = WriteLoop();
     }
 
-    public static async Task<PtySession> Start(string profile, string directory, int columns, int rows, CancellationToken token)
+    public static async Task<PtySession> Start(string profile, string directory, int columns, int rows, CancellationToken token, string? conversationId = null)
     {
         if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
-        var plan = ProfileCatalog.ResolveLaunch(profile, FindExecutable);
+        var plan = ProfileCatalog.ResolveLaunch(profile, FindExecutable, conversationId);
         var app = plan.App;
         var args = plan.Arguments;
         var environment = new Dictionary<string, string> { ["TERM"] = "xterm-256color", ["COLORTERM"] = "truecolor" };
@@ -68,13 +67,17 @@ internal sealed class PtySession : IAsyncDisposable
         if (!_input.Writer.TryWrite(Encoding.UTF8.GetBytes(text))) throw new IOException("Session not accepting input right now. This batch was not sent; try again.");
     }
 
-    public void WriteResponses(IReadOnlyList<string> responses)
+    public async Task WriteResponsesAsync(IReadOnlyList<string> responses)
     {
         if (_disposed) return;
-        // One batch avoids filling the queue with individual capability replies.
         var text = string.Concat(responses);
-        if (text.Length > 1024 * 1024 || !_input.Writer.TryWrite(Encoding.UTF8.GetBytes(text)))
-            Warning?.Invoke("Terminal response queue is full. A capability reply could not be delivered; reopen the session if the tool is waiting.");
+        if (text.Length > 1024 * 1024) throw new IOException("Terminal reply exceeds the 1 MB limit.");
+        // Backpressure on the reader preserves replies without an unbounded retry queue.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        try { await _input.Writer.WriteAsync(Encoding.UTF8.GetBytes(text), timeout.Token); }
+        catch (OperationCanceledException) when (!_stop.IsCancellationRequested)
+        { throw new IOException("Terminal input stalled for five seconds while delivering a reply."); }
     }
 
     public void Resize(int columns, int rows) { if (!_disposed) _pty.Resize(columns, rows); }
@@ -90,7 +93,7 @@ internal sealed class PtySession : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { if (!_disposed) Ended?.Invoke("Write failed: " + ex.Message); }
+        catch (Exception ex) { _input.Writer.TryComplete(ex); if (!_disposed) Ended?.Invoke("Write failed: " + ex.Message); }
     }
 
     private async Task ReadLoop()
@@ -104,11 +107,16 @@ internal sealed class PtySession : IAsyncDisposable
                 var count = await _pty.ReaderStream.ReadAsync(bytes, _stop.Token);
                 if (count == 0) break;
                 var text = decoder.Decode(bytes.AsSpan(0, count));
-                if (text.Length > 0 && !_disposed) Output?.Invoke(text);
+                if (text.Length > 0 && !_disposed) { if (Output is { } output) await output(text); }
             }
             var tail = decoder.Decode([], flush: true);
-            if (tail.Length > 0 && !_disposed) Output?.Invoke(tail);
-            if (!_disposed) Ended?.Invoke("Session ended — you can open a new session.");
+            if (tail.Length > 0 && !_disposed) { if (Output is { } output) await output(tail); }
+            if (!_disposed)
+            {
+                if (!_pty.WaitForExit(1000)) Ended?.Invoke("Session stopped: output closed before process exit was confirmed.");
+                else if (_pty.ExitCode == 0) Ended?.Invoke("Session ended (exit 0).");
+                else Ended?.Invoke("Session failed (exit " + _pty.ExitCode + ").");
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!_disposed) Ended?.Invoke("Session stopped: " + ex.Message); }

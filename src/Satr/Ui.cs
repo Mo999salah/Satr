@@ -7,7 +7,7 @@ using Avalonia.Media;
 namespace Satr;
 
 /// <summary>Chrome tokens. Terminal cells stay on their own palette.</summary>
-internal static class Ui
+internal static partial class Ui
 {
     public static readonly Color ChromeColor = Color.Parse("#191919");
     public static readonly Color TerminalColor = Color.Parse("#191919");
@@ -33,6 +33,8 @@ internal static class Ui
         OperatingSystem.IsWindows()
             ? "Segoe UI Variable, Segoe UI"
             : "IBM Plex Sans, Inter, Noto Sans, DejaVu Sans");
+
+    public static FontFamily TerminalFont(string name) => new(name + (OperatingSystem.IsWindows() ? ", Segoe UI" : ", Noto Sans Arabic, DejaVu Sans"));
 
     public static Button Ghost(string text, Action action, string? tip = null)
     {
