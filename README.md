@@ -1,126 +1,124 @@
 # Satr
 
-**An English-first terminal workspace for Windows and Linux.**
+**A project workspace terminal for AI coding CLIs — with correct Arabic and mixed-script rendering.**
 
 [Downloads](https://github.com/Mo999salah/Satr/releases) · [Issues](https://github.com/Mo999salah/Satr/issues) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
 
-Satr provides a full-width terminal with an English interface, project tabs, and direct access to shells and AI CLIs on Windows and Linux. The separate prompt editor has been removed from the current source; existing preview downloads may still include it. The application interface is in English.
+Satr is a desktop terminal built around how people actually work with Codex, Claude Code, and other AI CLIs: one window, one project folder, several sessions, and text that stays readable when Arabic and English share the same line.
 
-Built by [Mohamad Salah](https://mohamadsala.me/).
+Most terminals treat mixed-script output as an afterthought. Satr treats it as the point — Unicode bidirectional layout, Arabic shaping, and IME preedit on the terminal surface — while still behaving like a modern emulator for TUI tools (alternate screen, bracketed paste, mouse reporting, scrollback search).
 
-> **0.3.0:** full-width terminal, English UI, search, command palette, tab controls, persisted window settings, scrollback reflow, IME plumbing and optional native Wayland startup.
+Built by [Mohamad Salah](https://mohamadsala.me/). Current release: **0.3.0**.
+
+## What Satr is for
+
+Satr answers a narrow question: *how do I keep AI CLI work organized per project, without fighting the terminal when the text is not plain ASCII?*
+
+| You want to… | Satr gives you… |
+| --- | --- |
+| Work in a repo with shell + AI sessions side by side | Project-labelled tabs that restore on reopen |
+| Paste prompts, code, and mixed Arabic/English text | A terminal that shapes and lays out mixed script correctly |
+| Jump back through long CLI output | Scrollback search (`Ctrl+Shift+F`) and readable transcript export |
+| Pick up where Codex or another tool left off | Resume launchers and saved workspace state |
+| Stay local | No telemetry, no bundled model, no app-level network client |
+
+Satr is **not** an AI product. It launches tools already on your `PATH` and renders what they print.
+
+## How a session works
+
+1. **Pick a project directory** — tabs are scoped to a folder.
+2. **Open a session** — shell, Codex, Claude Code, Agy, Omp, or a resumed CLI.
+3. **Type or paste in the terminal** — review output, search scrollback, copy selections.
+4. **Close the window** — layout, tabs, font, and geometry are saved; Codex tabs reopen via `codex resume`.
+
+Multi-line paste requires bracketed-paste support from the running CLI. The path bar follows shell OSC 7 when the shell emits it.
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+Shift+T | New shell tab |
+| Ctrl+Shift+P | Command palette (all session types) |
+| Ctrl+Tab / Ctrl+Shift+Tab | Switch tabs |
+| Ctrl+Shift+W | Close current tab |
+| Ctrl+Shift+C | Copy selection |
+| Ctrl+Shift+F | Search scrollback |
+| F3 / Shift+F3 | Next / previous match |
+| Ctrl+Shift+R | Restart ended session |
+| Ctrl+Shift+PageUp / PageDown | Move tab |
+| Ctrl+V | Paste into terminal |
+| Shift + drag | Select while mouse is captured by a TUI |
 
 ## Downloads
 
 | Platform | Package |
 | --- | --- |
-| Windows x64 | Release installer and portable archive |
-| Linux x64 | Release portable archive |
+| Windows x64 | [Release installer and portable ZIP](https://github.com/Mo999salah/Satr/releases) |
+| Linux x64 | [Portable `.tar.gz`](https://github.com/Mo999salah/Satr/releases) |
 | Source | GitHub source archive |
 
-Packages include the .NET runtime. Install AI tools separately and make them available on `PATH`. The Windows installer is unsigned. No AUR package is published.
-
-## Features implemented
-
-- Full-width terminal with project-labelled tabs; type or paste directly into the active CLI.
-- ANSI rendering with Unicode bidirectional layout and Arabic shaping.
-- Project directories, multiple sessions and lazy restoration of saved tabs.
-- Search across scrollback with `Ctrl+Shift+F`, `Enter`, `Shift+Enter` and `F3`.
-- Custom tab names, tab movement, ended-session restart and per-tab status.
-- Font family, font size, scrollback depth and window geometry persistence.
-- Current-directory tracking through shell OSC 7 integration when the shell emits it.
-- Arabic IME preedit support on the terminal surface.
-- Launch actions for Codex, `codex resume`, Claude Code, Agy, Omp (plus `--continue` resume) and the system shell.
-- Bracketed paste, application cursor keys, alternate screen, SGR mouse and focus reporting.
-- Selection, clipboard text, scrollback, font-size adjustment and a readable text transcript.
-- Atomic workspace saves, backup recovery and draft archiving when closing tabs.
-- Shared Avalonia UI with Windows ConPTY and Linux PTY connections through Porta.Pty.
-
-Implemented launch actions do not mean verified compatibility with every CLI version. Satr does not bundle an AI model or subscription.
+Packages ship the .NET runtime. Install AI tools separately. The Windows installer is unsigned. No AUR package is published.
 
 ## Installation
 
 ### Windows
 
-Run the installer, or extract the **entire** portable ZIP and open `Satr.exe`. Keep native DLLs and ConPTY host directories beside the executable. The installer installs per user as **Satr Preview**, separately from the earlier WPF version. ConPTY requires Windows 10 build 17763 or newer.
+Run the installer, or extract the **entire** portable ZIP and launch `Satr.exe`. Keep native DLLs beside the executable. ConPTY requires Windows 10 build 17763 or newer. Installs per user as **Satr Preview**, separate from the earlier WPF build.
 
-### Arch Linux
+### Linux (x86_64)
 
-The portable package targets x86_64. X11/XWayland remains the default. Native Wayland is available as an explicit experimental opt-in:
+X11/XWayland is the default. Native Wayland is an experimental opt-in.
 
 ```bash
 sudo pacman -S --needed libx11 libice libsm libxrandr libxi libxcursor fontconfig freetype2 icu openssl zlib ttf-dejavu noto-fonts noto-fonts-emoji xorg-xwayland
-mkdir satr
-tar -xzf Satr-0.3.0-linux-x64.tar.gz -C satr
-cd satr
-chmod +x Satr
-./Satr
-# Optional native Wayland backend on Avalonia 12.1:
+mkdir satr && tar -xzf Satr-0.3.0-linux-x64.tar.gz -C satr && cd satr
+chmod +x Satr && ./Satr
+# Optional native Wayland:
 SATR_BACKEND=wayland ./Satr
-# Optional per-user installation and application-menu entry:
+# Optional menu entry + ~/.local/bin/satr:
 bash install-linux.sh
 ```
 
-The script installs into `$XDG_DATA_HOME/satr`, falling back to `~/.local/share/satr`, creates `~/.local/bin/satr` plus an application-menu entry, and removes legacy `satr-preview` launchers. `bash uninstall-linux.sh` (beside it) removes the install but keeps workspace data. Do not run it with `sudo`. Close an existing installation before replacing files.
+`install-linux.sh` installs to `$XDG_DATA_HOME/satr` (or `~/.local/share/satr`), adds a desktop entry, and removes legacy `satr-preview` launchers. `bash uninstall-linux.sh` removes the app but keeps workspace data. Do not run either script with `sudo`.
 
-## Workflow
+## Capabilities
 
-1. Choose a project directory and open a shell or Codex session.
-2. Type directly into the terminal or paste clipboard text with **Ctrl+V**.
-3. Review the text and press **Enter** to submit it.
+**Terminal core** — ANSI parser, scrollback with resize reflow, alternate screen, application cursor keys, SGR mouse, focus reporting, OSC 7 working-directory tracking, OSC 8 hyperlinks, OSC 133 prompt marks.
 
-Multi-line pastes are rejected if the session has not enabled bracketed paste. The displayed directory follows shell OSC 7 when available and otherwise remains the starting directory. Restoration launches only the selected tab. Saved Codex tabs reopen through `codex resume`. Closing the window saves the workspace and terminates sessions.
+**Mixed script** — Smart RTL spans inside LTR rows, Arabic shaping, emoji-width cells, IME preedit overlay.
 
-| Shortcut | Action |
-| --- | --- |
-| Ctrl+Shift+T | Open a shell tab |
-| Ctrl+Tab / Ctrl+Shift+Tab | Switch tabs |
-| Ctrl+Shift+W | Close the current tab |
-| Ctrl+Shift+C | Copy selected terminal text |
-| Ctrl+Shift+F | Search scrollback |
-| F3 / Shift+F3 | Next / previous search result |
-| Ctrl+Shift+R | Restart ended session |
-| Ctrl+Shift+PageUp / PageDown | Move current tab |
-| Ctrl+V in the terminal | Paste clipboard text |
-| Shift + mouse selection | Select while a CLI captures mouse input |
+**Workspace** — Atomic JSON persistence with backup recovery, custom tab titles, font family/size, scrollback depth, window geometry, clipboard-image file paths.
+
+**Platform** — Avalonia UI on Windows (ConPTY) and Linux (PTY) via Porta.Pty.
+
+Launch profiles exist for Codex, `codex resume`, Claude Code, Agy, Agy `--continue`, Omp, Omp `--continue`, and the system shell. Compatibility with every CLI version is not guaranteed.
 
 ## Data and privacy
-
-Satr adds no telemetry, updater, API-key store or application network client. Launched CLIs manage their own authentication and network activity. Drafts are plain text; avoid retaining secrets in them.
 
 | Platform | Workspace location |
 | --- | --- |
 | Windows | `%LocalAppData%\Satr` |
 | Linux | `$XDG_STATE_HOME/Satr` or `~/.local/state/Satr` |
 
-`SATR_DATA_DIR` overrides the location. A one-time automatic migration moves an existing `Satr-Preview` workspace to `Satr`. The old WPF workspace is not automatically imported or modified. Do not share a data directory between running versions. Clipboard images are stored under `clipboard-images` in the workspace and are not uploaded by Satr. Uninstalling on Windows preserves workspace data.
+`SATR_DATA_DIR` overrides the path. Existing `Satr-Preview` data migrates once to `Satr`. Do not point two running installs at the same directory. Clipboard images land in `clipboard-images/` locally; Satr does not upload them. Uninstalling preserves workspace files.
 
 ## Build from source
 
-Requires **.NET SDK 10**. PowerShell 7 is needed for packaging; Inno Setup 6 is optional for the Windows installer.
+Requires **.NET SDK 10**. PowerShell 7 for packaging; Inno Setup 6 optional for the Windows installer.
 
 ```bash
-git clone https://github.com/Mo999salah/Satr.git
-cd Satr
+git clone https://github.com/Mo999salah/Satr.git && cd Satr
 dotnet build src/Satr/Satr.csproj -c Release
 dotnet run --project src/Satr/Satr.csproj
 ```
 
 ```powershell
 ./scripts/Build.ps1 -Dotnet dotnet
-# Optional Windows installer:
+# Windows installer:
 ./scripts/Build.ps1 -Dotnet dotnet -Compiler 'C:/path/to/ISCC.exe'
 ```
 
-Direct Linux publication:
-
-```bash
-dotnet publish src/Satr/Satr.csproj -c Release -r linux-x64 --self-contained true
-```
-
-Packages go to `artifacts/`, which is excluded from Git. GitHub Actions builds archives on pushes and pull requests; it does not automatically publish releases or run runtime checks.
-
-Optional checks (run before release):
+Artifacts land in `artifacts/`. CI builds archives on push and pull request but does not publish releases or run runtime checks. Before a release:
 
 ```bash
 dotnet run --project tests/Satr.PortChecks/Satr.PortChecks.csproj
@@ -129,28 +127,28 @@ dotnet run --project tests/Satr.BufferTests/Satr.BufferTests.csproj
 
 ## Architecture
 
-| Component | Responsibility |
+| File | Role |
 | --- | --- |
-| `TerminalBuffer.cs` | ANSI parsing, screen state, scrollback and negotiated modes |
-| `SmartRtl.cs` | Unicode bidirectional ordering |
-| `TerminalView.cs` | Cell layout, shaped text, selection and drawing |
-| `PtySession.cs` | Startup, UTF-8 streams, input queue and PTY lifecycle |
-| `MainWindow.cs` | Workspace UI and session interaction |
-| `WorkspaceStore.cs` | Atomic persistence and recovery |
+| `TerminalBuffer.cs` | ANSI parsing, screen state, scrollback |
+| `SmartRtl.cs` | Bidirectional span detection |
+| `TerminalView.cs` | Layout, shaping, selection, drawing |
+| `PtySession.cs` | PTY lifecycle and UTF-8 I/O |
+| `MainWindow.cs` | Workspace UI and session control |
+| `WorkspaceStore.cs` | Persistence and recovery |
 
-Dependencies: **Avalonia 12.1.2**, **Porta.Pty 2.2.2**, **Unicode.Bidi 0.3.18**. Satr uses the free Avalonia framework, not commercial XPF.
+Stack: **Avalonia 12.1.2**, **Porta.Pty 2.2.2**, **Unicode.Bidi 0.3.18**.
 
 ## Known limitations
 
-- CLI acceptance of pasted image paths depends on the selected tool; Satr stores the image and sends its path.
-- Current-directory tracking requires shell OSC 7 integration; shells that do not emit it retain the launch directory.
-- Native Wayland is experimental and opt-in; X11/XWayland remains the fallback path.
-- Clean-machine installer validation, binary signing and live Windows/Linux CLI compatibility remain release work.
+- Pasted image paths depend on what the active CLI accepts.
+- Directory tracking needs shell OSC 7; otherwise the launch path is shown.
+- Native Wayland is opt-in; X11/XWayland remains the supported default.
+- Installer signing, clean-machine validation, and live CLI compatibility testing remain release work.
 
-## Contributing and license
+## Contributing and lineage
 
-Focused bug reports and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Bug reports and focused pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Satr is open source under the [MIT license](LICENSE). It is an independently maintained derivative of [RtlTerminal](https://github.com/mirbehnam/RtlTerminal), not an engine written from scratch. Parser and rendering lineage remain attributed; the cross-platform project replaces WPF, Registry settings, Windows window helpers and the original session bridge.
+Satr is MIT-licensed. It is an independently maintained derivative of [RtlTerminal](https://github.com/mirbehnam/RtlTerminal): parser and rendering lineage stay attributed; this project replaces WPF, Registry settings, Windows window helpers, and the original session bridge with a cross-platform Avalonia app. Not affiliated with OpenAI, Anthropic, or the upstream author.
 
-Original copyright and dependency notices are preserved in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and [licenses/](licenses/). Satr is not affiliated with OpenAI, Anthropic or the upstream project.
+See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and [licenses/](licenses/) for copyright and dependency notices.
