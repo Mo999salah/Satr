@@ -122,6 +122,33 @@ dotnet build src/Satr/Satr.csproj -c Release
 dotnet run --project src/Satr/Satr.csproj
 ```
 
+Open an external program in a temporary Satr tab without changing saved sessions:
+
+```bash
+satr --command htop
+satr -e git status
+```
+
+## Linux development install
+
+Keep the Pacman-installed `satr` stable while testing each source change through a separate `satr-dev` install. The development build uses `SATR_DATA_DIR=$XDG_STATE_HOME/Satr-Dev`, so it never shares a workspace lock or session file with Satr.
+
+```bash
+./scripts/dev-linux.sh --dotnet /path/to/dotnet
+```
+
+The command runs buffer and portability checks, publishes Linux x64, installs `satr-dev`, adds **Satr Dev** to the app menu, then opens it. Use `--no-launch` to install without opening it.
+
+### Windows development install
+
+Keep the released Satr install stable while testing source changes through an isolated **Satr Dev** install. Its state is `%LocalAppData%\Satr-Dev-Data`, separate from `%LocalAppData%\Satr`.
+
+```powershell
+./scripts/Dev-Windows.ps1 -Dotnet C:\path\to\dotnet.exe
+```
+
+The command runs buffer and portability checks, publishes Windows x64, installs **Satr Dev**, creates Start Menu and Desktop shortcuts, then opens it. Use `-NoLaunch` to install without opening it.
+
 ```powershell
 ./scripts/Build.ps1 -Dotnet dotnet
 # Windows installer:

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Satr Dev
+Comment=Local development build of Satr
+Exec=satr-dev
+Terminal=false
+Categories=System;TerminalEmulator;Development;
+StartupWMClass=Satr

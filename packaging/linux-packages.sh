@@ -87,6 +87,18 @@ built=("$arch"/satr-"$version"-*.pkg.tar.zst "$arch"/satr-"$version"-*.pkg.tar.x
 test "${#built[@]}" -eq 1 || { printf 'expected one Arch package, got %s\n' "${#built[@]}" >&2; exit 1; }
 cp -f -- "${built[0]}" "$out/$pkg_name"
 
+if command -v repo-add >/dev/null; then
+    repo="$stage/pacman-repo"
+    mkdir -p -- "$repo"
+    cp -f -- "$out/$pkg_name" "$repo/"
+    repo-add --nocolor "$repo/satr.db.tar.zst" "$repo/$pkg_name"
+    # GitHub Releases cannot store symlinks; pacman fetches satr.db by name.
+    cp -L -- "$repo/satr.db" "$out/satr.db"
+    cp -L -- "$repo/satr.db.tar.zst" "$out/satr.db.tar.zst"
+    cp -L -- "$repo/satr.files" "$out/satr.files"
+    cp -L -- "$repo/satr.files.tar.zst" "$out/satr.files.tar.zst"
+fi
+
 # --- check ---
 dpkg-deb -I "$out/$deb_name" | grep -q 'Package: satr'
 tar -tf "$out/$pkg_name" | grep -qx 'usr/bin/satr'

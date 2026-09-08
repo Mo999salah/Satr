@@ -11,16 +11,32 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        StartupOptions options;
+        try { options = StartupOptions.Parse(args); }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            Console.Error.WriteLine(StartupOptions.HelpText);
+            Environment.ExitCode = 64;
+            return;
+        }
+        if (options.ShowHelp)
+        {
+            Console.WriteLine(StartupOptions.HelpText);
+            return;
+        }
         var builder = AppBuilder.Configure<App>().UsePlatformDetect();
         // Explicit opt-in keeps the established X11 path available on every desktop.
         if (OperatingSystem.IsLinux() && Environment.GetEnvironmentVariable("SATR_BACKEND") == "wayland")
             builder = builder.UseWayland();
-        builder.LogToTrace().StartWithClassicDesktopLifetime(args);
+        App.StartupCommand = options.Command;
+        builder.LogToTrace().StartWithClassicDesktopLifetime([]);
     }
 }
 
 public sealed class App : Application
 {
+    internal static string[]? StartupCommand { get; set; }
     public override void Initialize()
     {
         RequestedThemeVariant = ThemeVariant.Dark;
@@ -36,7 +52,7 @@ public sealed class App : Application
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            desktop.MainWindow = new MainWindow();
+            desktop.MainWindow = new MainWindow(StartupCommand);
         base.OnFrameworkInitializationCompleted();
     }
 }
