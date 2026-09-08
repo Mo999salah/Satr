@@ -10,6 +10,8 @@ foreach ($path in @(
     (Join-Path $artifacts "Satr-$version-linux-x64.tar.gz"),
     (Join-Path $artifacts "Satr-$version-win-x64.zip"),
     (Join-Path $artifacts "Satr-Setup-$version-win-x64.exe"),
+    (Join-Path $artifacts "satr_${version}_amd64.deb"),
+    (Join-Path $artifacts "satr-$version-1-x86_64.pkg.tar.zst"),
     (Join-Path $artifacts 'SHA256SUMS.txt')
 )) {
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
@@ -28,6 +30,11 @@ foreach ($rid in @('linux-x64', 'win-x64')) {
         }
         & tar -czf (Join-Path $artifacts "Satr-$version-$rid.tar.gz") -C $destination .
         if ($LASTEXITCODE -ne 0) { throw 'Linux archive failed' }
+        $bash = Get-Command bash -ErrorAction SilentlyContinue
+        if ($bash) {
+            & $bash.Source (Join-Path $root 'packaging/linux-packages.sh') $version $destination $artifacts
+            if ($LASTEXITCODE -ne 0) { throw 'Linux packages failed' }
+        }
     } else {
         if (!(Test-Path (Join-Path $destination 'x64/OpenConsole.exe'))) { throw 'ConPTY host missing' }
         Compress-Archive -Path (Join-Path $destination '*') -DestinationPath (Join-Path $artifacts "Satr-$version-$rid.zip") -Force
@@ -43,6 +50,12 @@ $releaseFiles = @(
 )
 if (Test-Path (Join-Path $artifacts "Satr-Setup-$version-win-x64.exe")) {
     $releaseFiles += Join-Path $artifacts "Satr-Setup-$version-win-x64.exe"
+}
+foreach ($linuxPackage in @(
+    (Join-Path $artifacts "satr_${version}_amd64.deb"),
+    (Join-Path $artifacts "satr-$version-1-x86_64.pkg.tar.zst")
+)) {
+    if (Test-Path -LiteralPath $linuxPackage) { $releaseFiles += $linuxPackage }
 }
 $releaseFiles | Get-Item | ForEach-Object {
     '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
