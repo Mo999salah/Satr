@@ -3,6 +3,15 @@ using Satr;
 
 // Explicit opt-in checks: never spawn a shell, a GUI, or an AI tool.
 static void Check(bool value, string name) { if (!value) throw new Exception(name); }
+Check(StartupOptions.Parse([]).Command is null, "default launch has no command");
+Check(StartupOptions.Parse(["-e", "echo", "hello"]).Command is ["echo", "hello"], "short command option preserves argv");
+Check(StartupOptions.Parse(["--command", "tool", "--flag"]).Command is ["tool", "--flag"], "long command option preserves argv");
+Check(StartupOptions.Parse(["--help"]).ShowHelp, "help option");
+try { StartupOptions.Parse(["--command"]); throw new Exception("empty command accepted"); } catch (ArgumentException) { }
+try { StartupOptions.Parse(["--unknown"]); throw new Exception("unknown option accepted"); } catch (ArgumentException) { }
+var externalPlan = PtySession.ResolveExternalCommand(["tool", "--flag", "value"], name => name == "tool" ? "/opt/tool" : null);
+Check(externalPlan.App == "/opt/tool" && externalPlan.Arguments is ["--flag", "value"], "external command resolves executable and preserves argv");
+try { PtySession.ResolveExternalCommand(["missing"], _ => null); throw new Exception("missing external command accepted"); } catch (FileNotFoundException) { }
 Check(MainWindow.TabTitle("Shell", "/home/inv/project/") == "\u2068project\u2069 · \u2068Shell\u2069", "project tab title with isolates");
 Check(MainWindow.TabTitle("CodexResume", "/").Contains("\u2068/\u2069"), "root directory tab title");
 Check(MainWindow.TabTitle("CodexResume", "/work/app").Contains("Codex · resume"), "resumed session label");

@@ -1,0 +1,27 @@
+# Maintainer: Mohamad Salah <98090972+Mo999salah@users.noreply.github.com>
+pkgname=satr-bin
+pkgver=0.4.0
+pkgrel=1
+pkgdesc='Project workspace terminal for AI coding CLIs'
+arch=('x86_64')
+url='https://github.com/Mo999salah/Satr'
+license=('MIT')
+depends=('libx11' 'libice' 'libsm' 'libxrandr' 'libxi' 'libxcursor' 'fontconfig' 'freetype2' 'icu' 'openssl' 'zlib')
+provides=('satr')
+conflicts=('satr')
+options=('!strip' '!debug')
+source=("https://github.com/Mo999salah/Satr/releases/download/v$pkgver/Satr-$pkgver-linux-x64.tar.gz"
+        'satr.desktop')
+sha256sums=('92cbf9fe1c64eb52c95856777fbd62cb0536e6eb9aabad793cf2aea52a4d7268'
+            'b825c1dd21f688af13bab2c719d270e4b94b0309fb63410ae55fb2b862bb0af1')
+
+package() {
+  install -d "$pkgdir/usr/lib/satr"
+  find "$srcdir" -mindepth 1 -maxdepth 1 ! -name satr.desktop -exec cp -a {} "$pkgdir/usr/lib/satr/" \;
+  rm -f "$pkgdir/usr/lib/satr/install-linux.sh" "$pkgdir/usr/lib/satr/uninstall-linux.sh"
+  chmod 755 "$pkgdir/usr/lib/satr/Satr"
+  install -d "$pkgdir/usr/bin"
+  ln -s /usr/lib/satr/Satr "$pkgdir/usr/bin/satr"
+  install -Dm644 "$srcdir/satr.desktop" "$pkgdir/usr/share/applications/satr.desktop"
+  install -Dm644 "$pkgdir/usr/lib/satr/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

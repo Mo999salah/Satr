@@ -25,6 +25,7 @@ public sealed partial class MainWindow : Window
     private readonly List<Tab> _tabs = [];
     private readonly DispatcherTimer _render = new() { Interval = TimeSpan.FromMilliseconds(33) };
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly string[]? _startupCommand;
     private FileStream? _instanceLock;
     private Tab? _active;
     private bool _loading, _saveEnabled, _closed, _closing, _smartRtl = true, _restoredFromBackup;
@@ -43,6 +44,8 @@ public sealed partial class MainWindow : Window
         public Border Pip = Ui.Pip();
         public string Transcript = "";
         public string? ConversationId;
+        public LaunchPlan? Launch;
+        public bool Transient;
         public bool Failed;
         public bool Rtl = rtl, Starting, Closed, Finished, Dirty = true, Follow = true, AwaitingLaunch;
         public int Columns = 80, Rows = 24;
@@ -55,8 +58,9 @@ public sealed partial class MainWindow : Window
         public ListBoxItem Header = new();
     }
 
-    public MainWindow()
+    public MainWindow(string[]? startupCommand = null)
     {
+        _startupCommand = startupCommand;
         Title = "Satr"; Width = 1220; Height = 820; MinWidth = 680; MinHeight = 540;
         Icon = new WindowIcon(Avalonia.Platform.AssetLoader.Open(new Uri("avares://Satr/Satr.ico")));
         Ui.Paint(this); FontSize = 13;
@@ -187,7 +191,7 @@ public sealed partial class MainWindow : Window
         _directoryTimer.Tick += (_, _) => RefreshDirectory();
         PositionChanged += (_, _) => RememberWindow();
         SizeChanged += (_, _) => RememberWindow();
-        Opened += (_, _) => { Restore(); _directoryTimer.Start(); };
+        Opened += (_, _) => { Restore(); OpenStartupCommand(); _directoryTimer.Start(); };
         Closing += OnClosing;
     }
 
@@ -361,7 +365,18 @@ public sealed partial class MainWindow : Window
         RefreshChrome(); MeasureFont(); _render.Start();
     }
 
-    private void AddTab(string profile, string? directory = null, string draft = "", bool rtl = true, string? title = null, string? project = null, string transcript = "", string? conversationId = null)
+    private void OpenStartupCommand()
+    {
+        if (_startupCommand is not { Length: > 0 }) return;
+        try
+        {
+            var plan = PtySession.ResolveExternalCommand(_startupCommand, PtySession.FindExecutable);
+            AddTab("Shell", title: Path.GetFileName(plan.App), launch: plan, transient: true);
+        }
+        catch (Exception ex) { StatusError("Command was not started: " + ex.Message); }
+    }
+
+    private void AddTab(string profile, string? directory = null, string draft = "", bool rtl = true, string? title = null, string? project = null, string transcript = "", string? conversationId = null, LaunchPlan? launch = null, bool transient = false)
     {
         if (_instanceLock is null) return;
         if (_tabs.Count >= 50) { StatusError("Maximum 50 tabs."); return; }
@@ -377,7 +392,7 @@ public sealed partial class MainWindow : Window
         var tab = new Tab(profile, cwd, draft, rtl)
         {
             CustomTitle = title, Transcript = transcript, ConversationId = conversationId,
-            Project = string.IsNullOrWhiteSpace(project) ? cwd : project,
+            Project = string.IsNullOrWhiteSpace(project) ? cwd : project, Launch = launch, Transient = transient,
             AwaitingLaunch = _loading
         };
         if (tab.AwaitingLaunch)
@@ -417,7 +432,7 @@ public sealed partial class MainWindow : Window
         tabMenu.Items.Add(Item(Ui.L("Force-kill session"), () => ForceKill(tab)));
         tab.Header.ContextMenu = tabMenu;
         UpdateTab(tab);
-        RememberProject(tab.Project);
+        if (!tab.Transient) RememberProject(tab.Project);
         _tabs.Add(tab);
         RefreshProjectGroups();
         RefreshChrome();
@@ -480,7 +495,10 @@ public sealed partial class MainWindow : Window
         if (ReferenceEquals(_active, tab)) Status("Starting session…");
         try
         {
-            var session = await PtySession.Start(tab.Profile, LaunchDirectory(tab.Profile, tab.Project, tab.Directory), tab.Columns, tab.Rows, _shutdown.Token, tab.ConversationId);
+            var directory = LaunchDirectory(tab.Profile, tab.Project, tab.Directory);
+            var session = tab.Launch is { } launch
+                ? await PtySession.Start(launch, directory, tab.Columns, tab.Rows, _shutdown.Token)
+                : await PtySession.Start(tab.Profile, directory, tab.Columns, tab.Rows, _shutdown.Token, tab.ConversationId);
             if (_closed || _closing || tab.Closed) { await session.DisposeAsync(); return; }
             tab.Session = session;
             session.Output += async text =>
@@ -511,8 +529,10 @@ public sealed partial class MainWindow : Window
         if (!_saveEnabled) return false;
         try
         {
-            WorkspaceStore.Save(WorkspaceStore.StatePath, new SavedWorkspace(_tabs.Select(tab =>
-                new SavedTab(tab.Profile, tab.Directory, tab.Draft, tab.Rtl, tab.CustomTitle, tab.Project, SavedTranscript(tab), tab.ConversationId)).ToArray(), Math.Max(0, _tabs.IndexOf(_active!)), _terminal.FontSize, _smartRtl,
+            var savedTabs = _tabs.Where(tab => !tab.Transient).ToArray();
+            var selected = Array.IndexOf(savedTabs, _active);
+            WorkspaceStore.Save(WorkspaceStore.StatePath, new SavedWorkspace(savedTabs.Select(tab =>
+                new SavedTab(tab.Profile, tab.Directory, tab.Draft, tab.Rtl, tab.CustomTitle, tab.Project, SavedTranscript(tab), tab.ConversationId)).ToArray(), Math.Max(0, selected), _terminal.FontSize, _smartRtl,
                 _terminal.FontFamily.Name, _normalWidth, _normalHeight, _normalPosition?.X, _normalPosition?.Y, WindowState == WindowState.Maximized, _scrollbackRows, WorkspaceStore.CurrentSchema, _projects.ToArray(), _sidebarHidden, _sidebarWidth, _saveTranscripts, Ui.Arabic, _shortcuts));
             return true;
         }

@@ -12,6 +12,10 @@ foreach ($path in @(
     (Join-Path $artifacts "Satr-Setup-$version-win-x64.exe"),
     (Join-Path $artifacts "satr_${version}_amd64.deb"),
     (Join-Path $artifacts "satr-$version-1-x86_64.pkg.tar.zst"),
+    (Join-Path $artifacts 'satr.db'),
+    (Join-Path $artifacts 'satr.db.tar.zst'),
+    (Join-Path $artifacts 'satr.files'),
+    (Join-Path $artifacts 'satr.files.tar.zst'),
     (Join-Path $artifacts 'SHA256SUMS.txt')
 )) {
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
@@ -53,7 +57,11 @@ if (Test-Path (Join-Path $artifacts "Satr-Setup-$version-win-x64.exe")) {
 }
 foreach ($linuxPackage in @(
     (Join-Path $artifacts "satr_${version}_amd64.deb"),
-    (Join-Path $artifacts "satr-$version-1-x86_64.pkg.tar.zst")
+    (Join-Path $artifacts "satr-$version-1-x86_64.pkg.tar.zst"),
+    (Join-Path $artifacts 'satr.db'),
+    (Join-Path $artifacts 'satr.db.tar.zst'),
+    (Join-Path $artifacts 'satr.files'),
+    (Join-Path $artifacts 'satr.files.tar.zst')
 )) {
     if (Test-Path -LiteralPath $linuxPackage) { $releaseFiles += $linuxPackage }
 }

@@ -27,6 +27,12 @@ internal sealed class PtySession : IAsyncDisposable
     {
         if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
         var plan = ProfileCatalog.ResolveLaunch(profile, FindExecutable, conversationId);
+        return await Start(plan, directory, columns, rows, token);
+    }
+
+    public static async Task<PtySession> Start(LaunchPlan plan, string directory, int columns, int rows, CancellationToken token)
+    {
+        if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
         var app = plan.App;
         var args = plan.Arguments;
         var environment = new Dictionary<string, string> { ["TERM"] = "xterm-256color", ["COLORTERM"] = "truecolor" };
@@ -41,22 +47,37 @@ internal sealed class PtySession : IAsyncDisposable
         return new PtySession(pty);
     }
 
+    internal static LaunchPlan ResolveExternalCommand(IReadOnlyList<string> command, Func<string, string?> find)
+    {
+        if (command.Count == 0) throw new ArgumentException("A program is required.");
+        if (command.Any(string.IsNullOrWhiteSpace) || command.Any(value => value.Any(char.IsControl)))
+            throw new ArgumentException("Command arguments cannot be empty or contain control characters.");
+        var app = find(command[0]) ?? throw new FileNotFoundException($"{command[0]} not found in PATH. Use an executable on PATH or an absolute path.");
+        if (OperatingSystem.IsWindows() && Path.GetExtension(app) is ".cmd" or ".bat")
+            throw new NotSupportedException("Windows batch files are not supported by --command; run cmd.exe explicitly.");
+        return new LaunchPlan(app, command.Skip(1).ToArray());
+    }
+
     internal static string? FindExecutable(string name)
     {
+        if (string.IsNullOrWhiteSpace(name) || name.Any(char.IsControl)) return null;
+        if (Path.IsPathFullyQualified(name)) return IsExecutableFile(name) ? Path.GetFullPath(name) : null;
+        if (name.Contains(Path.DirectorySeparatorChar) || name.Contains(Path.AltDirectorySeparatorChar)) return null;
         foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
         {
             if (string.IsNullOrWhiteSpace(directory)) continue;
             foreach (var suffix in OperatingSystem.IsWindows() ? new[] { ".exe", ".cmd", ".bat" } : new[] { "" })
             {
                 var path = Path.Combine(directory.Trim('"'), name + suffix);
-                if (!File.Exists(path)) continue;
-                if (OperatingSystem.IsWindows() || (File.GetUnixFileMode(path) &
-                    (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0)
-                    return Path.GetFullPath(path);
+                if (IsExecutableFile(path)) return Path.GetFullPath(path);
             }
         }
         return null;
     }
+
+    private static bool IsExecutableFile(string path) => File.Exists(path) &&
+        (OperatingSystem.IsWindows() || (File.GetUnixFileMode(path) &
+            (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0);
 
     public void ReadOutput() => _reader ??= Task.Run(ReadLoop);
 
