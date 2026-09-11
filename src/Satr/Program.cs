@@ -29,6 +29,7 @@ internal static class Program
         // Explicit opt-in keeps the established X11 path available on every desktop.
         if (OperatingSystem.IsLinux() && Environment.GetEnvironmentVariable("SATR_BACKEND") == "wayland")
             builder = builder.UseWayland();
+        App.RestoreWorkspace = options.RestoreWorkspace;
         App.StartupCommand = options.Command;
         builder.LogToTrace().StartWithClassicDesktopLifetime([]);
     }
@@ -36,6 +37,7 @@ internal static class Program
 
 public sealed class App : Application
 {
+    internal static bool RestoreWorkspace { get; set; }
     internal static string[]? StartupCommand { get; set; }
     public override void Initialize()
     {
@@ -52,7 +54,7 @@ public sealed class App : Application
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
-            desktop.MainWindow = new MainWindow(StartupCommand);
+            desktop.MainWindow = new MainWindow(StartupCommand, RestoreWorkspace);
         base.OnFrameworkInitializationCompleted();
     }
 }

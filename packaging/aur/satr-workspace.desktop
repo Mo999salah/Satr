@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Satr Dev
-Comment=Local development build of Satr plain terminal
-Exec=satr-dev
+Name=Satr Workspace
+Comment=Restore saved project sessions
+Exec=/usr/bin/satr --workspace
 Terminal=false
 Categories=System;TerminalEmulator;Development;
 StartupWMClass=Satr

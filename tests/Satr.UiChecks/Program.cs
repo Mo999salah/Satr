@@ -33,7 +33,7 @@ class UiChecks : Application
     public override void OnFrameworkInitializationCompleted()
     {
         var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
-        var window = new MainWindow(); desktop.MainWindow = window;
+        var window = new MainWindow(workspaceMode: true); desktop.MainWindow = window;
         window.Opened += async (_, _) =>
         {
             try

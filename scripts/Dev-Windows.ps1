@@ -48,6 +48,17 @@ foreach ($shortcutPath in @(
     $shortcut.IconLocation = "$(Join-Path $target 'Satr.exe'),0"
     $shortcut.Save()
 }
+foreach ($shortcutPath in @(
+    (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Satr Dev Workspace.lnk'),
+    (Join-Path ([Environment]::GetFolderPath('Programs')) 'Satr Dev Workspace.lnk')
+)) {
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = $launcher
+    $shortcut.Arguments = '--workspace'
+    $shortcut.WorkingDirectory = $target
+    $shortcut.IconLocation = "$(Join-Path $target 'Satr.exe'),0"
+    $shortcut.Save()
+}
 
 Write-Host "Installed Satr Dev: $target"
 Write-Host "State: $state"

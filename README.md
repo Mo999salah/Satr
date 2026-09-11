@@ -8,7 +8,7 @@ Satr is a desktop terminal built around how people actually work with Codex, Cla
 
 Most terminals treat mixed-script output as an afterthought. Satr treats it as the point — Unicode bidirectional layout, Arabic shaping, and IME preedit on the terminal surface — while still behaving like a modern emulator for TUI tools (alternate screen, bracketed paste, mouse reporting, scrollback search).
 
-Built by [Mohamad Salah](https://mohamadsala.me/). Current release: **0.4.0**.
+Built by [Mohamad Salah](https://mohamadsala.me/). Current release: **0.4.1**.
 
 ## What Satr is for
 
@@ -29,7 +29,7 @@ Satr is **not** an AI product. It launches tools already on your `PATH` and rend
 1. **Pick a project directory** — tabs are scoped to a folder.
 2. **Open a session** — shell, Codex, Claude Code, Agy, Omp, or a resumed CLI.
 3. **Type or paste in the terminal** — review output, search scrollback, copy selections.
-4. **Close the window** — tabs, project roots, session folders, font, and geometry are saved. Restored tabs wait for an explicit launch with Ctrl+Shift+R. Codex resumes through its own picker; other continuation profiles use the CLI's own selection behavior. For Codex and Omp, the session menu can bind an explicit conversation UUID for the next launch. Other tools keep their native selection behavior. Optional local text snapshots are available in Readable transcript; they are not replayed into the live terminal.
+4. **Close the workspace window** — tabs, project roots, session folders, font, and geometry are saved. Open **Satr Workspace** to restore them; restored tabs wait for an explicit launch with Ctrl+Shift+R. Codex resumes through its own picker; other continuation profiles use the CLI's own selection behavior. For Codex and Omp, the session menu can bind an explicit conversation UUID for the next launch. Other tools keep their native selection behavior. Optional local text snapshots are available in Readable transcript; they are not replayed into the live terminal.
 
 Multi-line paste requires bracketed-paste support from the running CLI. The path bar follows shell OSC 7 when the shell emits it.
 
@@ -81,7 +81,7 @@ X11/XWayland is the default. Native Wayland is an experimental opt-in.
 
 ```bash
 sudo pacman -S --needed libx11 libice libsm libxrandr libxi libxcursor fontconfig freetype2 icu openssl zlib ttf-dejavu noto-fonts noto-fonts-emoji xorg-xwayland
-mkdir satr && tar -xzf Satr-0.4.0-linux-x64.tar.gz -C satr && cd satr
+mkdir satr && tar -xzf Satr-0.4.1-linux-x64.tar.gz -C satr && cd satr
 chmod +x Satr && ./Satr
 # Optional native Wayland:
 SATR_BACKEND=wayland ./Satr
@@ -89,7 +89,7 @@ SATR_BACKEND=wayland ./Satr
 bash install-linux.sh
 ```
 
-`install-linux.sh` installs to `$XDG_DATA_HOME/satr` (or `~/.local/share/satr`), adds a desktop entry, and removes legacy `satr-preview` launchers. `bash uninstall-linux.sh` removes the app but keeps workspace data. Do not run either script with `sudo`.
+`install-linux.sh` installs to `$XDG_DATA_HOME/satr` (or `~/.local/share/satr`), adds **Satr** for a plain terminal and **Satr Workspace** for saved projects, and removes legacy `satr-preview` launchers. `bash uninstall-linux.sh` removes the app but keeps workspace data. Do not run either script with `sudo`.
 
 ## Capabilities
 
@@ -122,7 +122,7 @@ dotnet build src/Satr/Satr.csproj -c Release
 dotnet run --project src/Satr/Satr.csproj
 ```
 
-Open an external program in a temporary Satr tab without changing saved sessions:
+`satr` opens a plain shell at home without reading or writing saved projects. Open **Satr Workspace** or run `satr --workspace` to restore saved projects. Open an external program in one temporary Satr tab without changing saved sessions:
 
 ```bash
 satr --command htop

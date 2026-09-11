@@ -54,6 +54,7 @@ fi
 mv -- "$stage" "$target"
 ln -sfn -- "$target/satr-dev" "$launcher"
 install -m 755 "$root/packaging/satr-dev.desktop" "$applications/satr-dev.desktop"
+install -m 755 "$root/packaging/satr-dev-workspace.desktop" "$applications/satr-dev-workspace.desktop"
 
 printf 'Installed Satr Dev: %s\nRun: satr-dev\nState: %s/Satr-Dev\n' "$target" "${XDG_STATE_HOME:-$HOME/.local/state}"
 if "$launch"; then

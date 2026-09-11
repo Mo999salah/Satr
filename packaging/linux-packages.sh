@@ -32,6 +32,7 @@ payload | tar -C "$deb_root/usr/lib/satr" -xf -
 chmod 755 -- "$deb_root/usr/lib/satr/Satr"
 ln -s /usr/lib/satr/Satr "$deb_root/usr/bin/satr"
 install -m644 "$packaging/satr.desktop" "$deb_root/usr/share/applications/satr.desktop"
+install -m644 "$packaging/satr-workspace.desktop" "$deb_root/usr/share/applications/satr-workspace.desktop"
 install -m644 "$root/LICENSE" "$deb_root/usr/share/doc/satr/copyright"
 size="$(du -sk "$deb_root" | cut -f1)"
 cat > "$deb_root/DEBIAN/control" <<EOF
@@ -58,6 +59,7 @@ arch="$stage/arch"
 mkdir -p -- "$arch"
 payload | gzip -n > "$arch/payload.tar.gz"
 install -m644 "$packaging/satr.desktop" "$arch/satr.desktop"
+install -m644 "$packaging/satr-workspace.desktop" "$arch/satr-workspace.desktop"
 cat > "$arch/PKGBUILD" <<EOF
 pkgname=satr
 pkgver=$version
@@ -68,16 +70,17 @@ url='https://github.com/Mo999salah/Satr'
 license=('MIT')
 depends=('libx11' 'libice' 'libsm' 'libxrandr' 'libxi' 'libxcursor' 'fontconfig' 'freetype2' 'icu' 'openssl' 'zlib')
 options=('!strip' '!debug')
-source=('payload.tar.gz' 'satr.desktop')
-sha256sums=('SKIP' 'SKIP')
+source=('payload.tar.gz' 'satr.desktop' 'satr-workspace.desktop')
+sha256sums=('SKIP' 'SKIP' 'SKIP')
 
 package() {
   install -d "\$pkgdir/usr/lib/satr"
-  find "\$srcdir" -mindepth 1 -maxdepth 1 ! -name satr.desktop -exec cp -a {} "\$pkgdir/usr/lib/satr/" \\;
+  find "\$srcdir" -mindepth 1 -maxdepth 1 ! -name satr.desktop ! -name satr-workspace.desktop -exec cp -a {} "\$pkgdir/usr/lib/satr/" \\;
   chmod 755 "\$pkgdir/usr/lib/satr/Satr"
   install -d "\$pkgdir/usr/bin"
   ln -s /usr/lib/satr/Satr "\$pkgdir/usr/bin/satr"
   install -Dm644 "\$srcdir/satr.desktop" "\$pkgdir/usr/share/applications/satr.desktop"
+  install -Dm644 "\$srcdir/satr-workspace.desktop" "\$pkgdir/usr/share/applications/satr-workspace.desktop"
   install -Dm644 "\$pkgdir/usr/lib/satr/LICENSE" "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
 }
 EOF
