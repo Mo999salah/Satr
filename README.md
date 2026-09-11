@@ -8,7 +8,7 @@ Satr is a desktop terminal built around how people actually work with Codex, Cla
 
 Most terminals treat mixed-script output as an afterthought. Satr treats it as the point — Unicode bidirectional layout, Arabic shaping, and IME preedit on the terminal surface — while still behaving like a modern emulator for TUI tools (alternate screen, bracketed paste, mouse reporting, scrollback search).
 
-Built by [Mohamad Salah](https://mohamadsala.me/). Current release: **0.4.1**.
+Built by [Mohamad Salah](https://mohamadsala.me/). Current release: **0.4.2**.
 
 ## What Satr is for
 
@@ -81,7 +81,7 @@ X11/XWayland is the default. Native Wayland is an experimental opt-in.
 
 ```bash
 sudo pacman -S --needed libx11 libice libsm libxrandr libxi libxcursor fontconfig freetype2 icu openssl zlib ttf-dejavu noto-fonts noto-fonts-emoji xorg-xwayland
-mkdir satr && tar -xzf Satr-0.4.1-linux-x64.tar.gz -C satr && cd satr
+mkdir satr && tar -xzf Satr-0.4.2-linux-x64.tar.gz -C satr && cd satr
 chmod +x Satr && ./Satr
 # Optional native Wayland:
 SATR_BACKEND=wayland ./Satr

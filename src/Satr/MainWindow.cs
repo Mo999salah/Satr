@@ -193,7 +193,16 @@ public sealed partial class MainWindow : Window
         _directoryTimer.Tick += (_, _) => RefreshDirectory();
         PositionChanged += (_, _) => RememberWindow();
         SizeChanged += (_, _) => RememberWindow();
-        Opened += (_, _) => { if (_workspaceMode) Restore(); else if (ShouldOpenPlainShell(_startupCommand)) AddTab("Shell"); OpenStartupCommand(); _directoryTimer.Start(); };
+        Opened += (_, _) =>
+        {
+            if (_workspaceMode) Restore();
+            else
+            {
+                if (ShouldOpenPlainShell(_startupCommand)) AddTab("Shell");
+                _render.Start();
+            }
+            OpenStartupCommand(); _directoryTimer.Start();
+        };
         Closing += OnClosing;
     }
 
