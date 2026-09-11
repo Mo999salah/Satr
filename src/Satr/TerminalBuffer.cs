@@ -58,7 +58,7 @@ public sealed record TerminalSnapshot(
 
 public sealed class TerminalBuffer
 {
-    public const string ProductVersion = "0.3.0";
+    public const string ProductVersion = "0.4.1";
     private const int DefaultMaximumScrollbackRows = 2000;
     private const int MaximumClusterCharacters = 256;
     private static readonly TerminalColor[] AnsiColors =

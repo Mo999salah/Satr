@@ -26,6 +26,7 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer _render = new() { Interval = TimeSpan.FromMilliseconds(33) };
     private readonly CancellationTokenSource _shutdown = new();
     private readonly string[]? _startupCommand;
+    private readonly bool _workspaceMode;
     private FileStream? _instanceLock;
     private Tab? _active;
     private bool _loading, _saveEnabled, _closed, _closing, _smartRtl = true, _restoredFromBackup;
@@ -58,9 +59,10 @@ public sealed partial class MainWindow : Window
         public ListBoxItem Header = new();
     }
 
-    public MainWindow(string[]? startupCommand = null)
+    public MainWindow(string[]? startupCommand = null, bool workspaceMode = false)
     {
         _startupCommand = startupCommand;
+        _workspaceMode = workspaceMode;
         Title = "Satr"; Width = 1220; Height = 820; MinWidth = 680; MinHeight = 540;
         Icon = new WindowIcon(Avalonia.Platform.AssetLoader.Open(new Uri("avares://Satr/Satr.ico")));
         Ui.Paint(this); FontSize = 13;
@@ -191,7 +193,7 @@ public sealed partial class MainWindow : Window
         _directoryTimer.Tick += (_, _) => RefreshDirectory();
         PositionChanged += (_, _) => RememberWindow();
         SizeChanged += (_, _) => RememberWindow();
-        Opened += (_, _) => { Restore(); OpenStartupCommand(); _directoryTimer.Start(); };
+        Opened += (_, _) => { if (_workspaceMode) Restore(); else if (ShouldOpenPlainShell(_startupCommand)) AddTab("Shell"); OpenStartupCommand(); _directoryTimer.Start(); };
         Closing += OnClosing;
     }
 
@@ -378,7 +380,7 @@ public sealed partial class MainWindow : Window
 
     private void AddTab(string profile, string? directory = null, string draft = "", bool rtl = true, string? title = null, string? project = null, string transcript = "", string? conversationId = null, LaunchPlan? launch = null, bool transient = false)
     {
-        if (_instanceLock is null) return;
+        if (_workspaceMode && _instanceLock is null) return;
         if (_tabs.Count >= 50) { StatusError("Maximum 50 tabs."); return; }
         profile = ResolveProfile(profile, _loading);
         var available = IsLaunchable(profile);
@@ -432,7 +434,7 @@ public sealed partial class MainWindow : Window
         tabMenu.Items.Add(Item(Ui.L("Force-kill session"), () => ForceKill(tab)));
         tab.Header.ContextMenu = tabMenu;
         UpdateTab(tab);
-        if (!tab.Transient) RememberProject(tab.Project);
+        if (_workspaceMode && !tab.Transient) RememberProject(tab.Project);
         _tabs.Add(tab);
         RefreshProjectGroups();
         RefreshChrome();
@@ -452,6 +454,7 @@ public sealed partial class MainWindow : Window
         restoring || available;
     internal static bool ShouldAutoStart(string profile, bool available, bool restored = false) =>
         !restored && available && (profile == "Shell" || IsAi(profile));
+    internal static bool ShouldOpenPlainShell(string[]? startupCommand) => startupCommand is null;
     internal static string LaunchDirectory(string profile, string project, string directory) =>
         IsAi(profile)
             ? (System.IO.Directory.Exists(project) ? project : directory)
@@ -524,6 +527,7 @@ public sealed partial class MainWindow : Window
 
     private bool Persist()
     {
+        if (!_workspaceMode) return true;
         if (_loading) return true;
         SaveActive();
         if (!_saveEnabled) return false;

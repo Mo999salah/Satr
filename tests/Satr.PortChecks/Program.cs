@@ -3,9 +3,10 @@ using Satr;
 
 // Explicit opt-in checks: never spawn a shell, a GUI, or an AI tool.
 static void Check(bool value, string name) { if (!value) throw new Exception(name); }
-Check(StartupOptions.Parse([]).Command is null, "default launch has no command");
-Check(StartupOptions.Parse(["-e", "echo", "hello"]).Command is ["echo", "hello"], "short command option preserves argv");
-Check(StartupOptions.Parse(["--command", "tool", "--flag"]).Command is ["tool", "--flag"], "long command option preserves argv");
+Check(!StartupOptions.Parse([]).RestoreWorkspace && StartupOptions.Parse([]).Command is null, "default launch is a plain terminal");
+Check(StartupOptions.Parse(["--workspace"]).RestoreWorkspace && StartupOptions.Parse(["--workspace"]).Command is null, "workspace launch restores projects only when explicit");
+Check(!StartupOptions.Parse(["-e", "echo", "hello"]).RestoreWorkspace && StartupOptions.Parse(["-e", "echo", "hello"]).Command is ["echo", "hello"], "short command option preserves argv without restoring workspace");
+Check(!StartupOptions.Parse(["--command", "tool", "--flag"]).RestoreWorkspace && StartupOptions.Parse(["--command", "tool", "--flag"]).Command is ["tool", "--flag"], "long command option preserves argv without restoring workspace");
 Check(StartupOptions.Parse(["--help"]).ShowHelp, "help option");
 try { StartupOptions.Parse(["--command"]); throw new Exception("empty command accepted"); } catch (ArgumentException) { }
 try { StartupOptions.Parse(["--unknown"]); throw new Exception("unknown option accepted"); } catch (ArgumentException) { }
@@ -54,6 +55,7 @@ Check(MainWindow.ShouldCreateTab("Codex", restoring: true, available: false), "r
 Check(!MainWindow.ShouldCreateTab("Codex", restoring: false, available: false), "new session still requires the tool");
 Check(MainWindow.ShouldAutoStart("Shell", true) && !MainWindow.ShouldAutoStart("Codex", false), "missing tools do not auto-start");
 Check(!MainWindow.ShouldAutoStart("Shell", true, restored: true), "restored tabs wait for an explicit launch");
+Check(MainWindow.ShouldOpenPlainShell(null) && !MainWindow.ShouldOpenPlainShell(["htop"]), "plain shell is not added beside an external command");
 Check(MainWindow.KeySequence(Key.Up, KeyModifiers.None, true) == "\x1bOA", "application cursor");
 Check(MainWindow.KeySequence(Key.Left, KeyModifiers.Control, false) == "\x1b[1;5D", "Ctrl+Left");
 Check(MainWindow.KeySequence(Key.F12, KeyModifiers.Shift, false) == "\x1b[24;2~", "Shift+F12");

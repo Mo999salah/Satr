@@ -20,4 +20,5 @@ escaped=${escaped//\$/\\\$}
 escaped=${escaped//\`/\\\`}
 escaped=${escaped//%/%%}
 printf '[Desktop Entry]\nType=Application\nName=Satr\nComment=English terminal workspace\nExec="%s/Satr"\nTerminal=false\nCategories=System;TerminalEmulator;\nStartupWMClass=Satr\n' "$escaped" > "$applications/satr.desktop"
+printf '[Desktop Entry]\nType=Application\nName=Satr Workspace\nComment=Restore saved project sessions\nExec="%s/Satr" --workspace\nTerminal=false\nCategories=System;TerminalEmulator;Development;\nStartupWMClass=Satr\n' "$escaped" > "$applications/satr-workspace.desktop"
 printf 'Installed: %s\nRun: %s/Satr (or: satr)\n' "$target" "$target"

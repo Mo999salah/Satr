@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Satr
-Comment=Project workspace terminal for AI coding CLIs
+Comment=Plain terminal for shell commands
 Exec=/usr/bin/satr
 Terminal=false
 Categories=System;TerminalEmulator;
