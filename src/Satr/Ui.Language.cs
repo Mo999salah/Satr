@@ -40,6 +40,7 @@ internal static partial class Ui
         ["Copy selection"] = "نسخ التحديد", ["Paste into terminal"] = "لصق في الطرفية",
         ["Readable transcript"] = "النص المقروء", ["Paste image as file path"] = "لصق الصورة كمسار ملف",
         ["Copy folder path"] = "نسخ مسار المجلد", ["Reopen finished session"] = "إعادة فتح الجلسة المنتهية",
+        ["New window"] = "نافذة جديدة", ["Select all"] = "تحديد الكل",
         ["Rename session"] = "تسمية الجلسة", ["Move session up"] = "نقل الجلسة لأعلى",
         ["Move session down"] = "نقل الجلسة لأسفل", ["Duplicate session in same folder"] = "تكرار الجلسة في المجلد نفسه",
         ["Start or reopen session"] = "تشغيل الجلسة أو إعادة فتحها", ["Force-kill session"] = "إنهاء الجلسة بالقوة",

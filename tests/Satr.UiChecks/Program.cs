@@ -87,6 +87,23 @@ class UiChecks : Application
                 await Task.Delay(1200);
                 var buffer = (TerminalBuffer)Field(Field(window, "_active"), "Buffer");
                 Check(TerminalBuffer.LogicalText(buffer.CaptureSnapshot()).Contains("Satr UI check"), "Shell output must reach the terminal.");
+                // Ctrl+A must select all in the terminal, intercepted before \x01 reaches the shell.
+                var terminalForKeys = (TerminalView)Field(window, "_terminal");
+                terminalForKeys.Focus();
+                var ctrlA = new Avalonia.Input.KeyEventArgs { RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent, Key = Avalonia.Input.Key.A, KeyModifiers = Avalonia.Input.KeyModifiers.Control };
+                terminalForKeys.RaiseEvent(ctrlA);
+                Check(ctrlA.Handled && terminalForKeys.HasSelection, "Ctrl+A must select all before reaching the shell.");
+                // While the search box holds focus, Ctrl+A belongs to it, not the terminal.
+                Call(window, "OpenSearch");
+                var searchBox = (Avalonia.Controls.TextBox)Field(window, "_search");
+                searchBox.Text = "abc";
+                var searchCtrlA = new Avalonia.Input.KeyEventArgs { RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent, Key = Avalonia.Input.Key.A, KeyModifiers = Avalonia.Input.KeyModifiers.Control };
+                searchBox.RaiseEvent(searchCtrlA);
+                // The app must not intercept Ctrl+A while a text box has focus. Avalonia's
+                // TextBox applies its own select-all for real key input; a raised routed event
+                // bypasses that path, so the observable contract is "not handled by the app".
+                Check(!searchCtrlA.Handled, "Ctrl+A must not be stolen from the focused text box.");
+                Call(window, "CloseSearch");
                 typeof(MainWindow).GetField("_saveTranscripts", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
                 Call(window, "Persist");
                 Check(WorkspaceStore.Load(WorkspaceStore.StatePath).Tabs.Any(t => t.Transcript.Contains("Satr UI check")), "Opt-in transcript must persist output.");
@@ -106,12 +123,35 @@ class UiChecks : Application
                 Call(window, "Send", "exit\r");
                 await Task.Delay(1000);
                 var active = Field(window, "_active");
+                // Give a natural exit a chance to raise Ended first: DisposeAsync sets
+                // _disposed and the reader then skips Ended, so Finished would never land.
+                for (var i = 0; i < 20 && !(bool)Field(active, "Finished"); i++) await Task.Delay(100);
                 await ((IAsyncDisposable)Field(active, "Session")).DisposeAsync();
                 File.WriteAllText(Path.Combine(Output, "result.txt"), "PASS: restored projects, selection, explicit launch, terminal output, narrow layout, sidebar toggle, PTY cleanup.");
                 var projectsBefore = WorkspaceStore.Load(WorkspaceStore.StatePath).Projects!.Length;
-                Call(window, "CloseTab", active);
+                typeof(MainWindow).GetMethod("CloseTabAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, new[] { active, (object)true });
                 await Task.Delay(300);
                 Check(WorkspaceStore.Load(WorkspaceStore.StatePath).Projects!.Length == projectsBefore, "Closing a session must preserve its project.");
+                var defaults = (System.Collections.Generic.Dictionary<string, string>)typeof(MainWindow).GetField("DefaultShortcuts", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)!.GetValue(null)!;
+                Check(defaults["Select all"] == "Ctrl+A", "Ctrl+A must select all at the application level.");
+                var terminalMenu = ((TerminalView)Field(window, "_terminal")).ContextMenu;
+                Check(terminalMenu is not null && terminalMenu.Items.Count(i => i is MenuItem) == 4, "Terminal needs a right-click menu: copy, paste, select all, search.");
+                Call(window, "OpenNewWindow");
+                await Task.Delay(1500);
+                var satr = desktop.Windows.OfType<MainWindow>().ToArray();
+                Check(satr.Length == 2, "A new window must open and stay shown.");
+                var second = satr.First(w => !ReferenceEquals(w, window));
+                var secondTabs = (System.Collections.IList)Field(second, "_tabs");
+                Check(secondTabs.Count == 1, "A new window starts with its own shell session.");
+                var secondActive = Field(second, "_active");
+                Check(!ReferenceEquals(Field(window, "_active"), secondActive) && Field(secondActive, "Session") is not null, "Windows must not share session state.");
+                await ((IAsyncDisposable)Field(secondActive, "Session")).DisposeAsync();
+                await Task.Delay(200);
+                typeof(MainWindow).GetMethod("CloseTabAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(second, new[] { secondActive, (object)true });
+                await Task.Delay(300);
+                second.Close();
+                for (var i = 0; i < 20 && desktop.Windows.OfType<MainWindow>().Count() > 1; i++) await Task.Delay(100);
+                Check(desktop.Windows.OfType<MainWindow>().Count() == 1, "Closing the second window must keep the first running.");
                 Console.WriteLine("PASS " + Output);
                 desktop.Shutdown(0);
             }
