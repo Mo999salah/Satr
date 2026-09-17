@@ -35,6 +35,9 @@ var customKeys = MainWindow.ValidateShortcuts(new() { ["Commands"] = "Ctrl+Alt+P
 Check(customKeys["Commands"].Contains("Alt"), "custom shortcut applied");
 try { MainWindow.ValidateShortcuts(new() { ["Commands"] = "A" }); throw new Exception("typing shortcut accepted"); } catch (ArgumentException) { }
 try { MainWindow.ValidateShortcuts(new() { ["Commands"] = "Ctrl+Shift+F" }); throw new Exception("duplicate shortcut accepted"); } catch (ArgumentException) { }
+Check(MainWindow.ValidateShortcuts(null)["Select all"] == "Ctrl+A", "Ctrl+A selects all at the application level");
+Check(MainWindow.ValidateShortcuts(new() { ["Select all"] = "Ctrl+Shift+A" })["Select all"] == "Ctrl+A", "retired select-all binding follows the new default");
+Check(MainWindow.ValidateShortcuts(new() { ["Select all"] = "Ctrl+Alt+A" })["Select all"] == "Ctrl+Alt+A", "custom select-all binding is preserved");
 var conversation = "01234567-89ab-cdef-0123-456789abcdef";
 Check(ProfileCatalog.ResolveLaunch("Codex", _ => "/opt/codex", conversation).Arguments is ["resume", "01234567-89ab-cdef-0123-456789abcdef"], "exact codex binding");
 Check(ProfileCatalog.ResolveLaunch("Omp", _ => "/opt/omp", conversation).Arguments is ["--resume", "01234567-89ab-cdef-0123-456789abcdef"], "exact omp binding");

@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Avalonia.Input;
 
 namespace Satr;
@@ -11,8 +12,14 @@ public sealed partial class MainWindow
         ["Next session"] = "Ctrl+Tab", ["Previous session"] = "Ctrl+Shift+Tab",
         ["Move session up"] = "Ctrl+Shift+PageUp", ["Move session down"] = "Ctrl+Shift+PageDown",
         ["Previous prompt"] = "Ctrl+Shift+Up", ["Next prompt"] = "Ctrl+Shift+Down",
-        ["Copy selection"] = "Ctrl+Shift+C", ["Paste into terminal"] = "Ctrl+V", ["Select all"] = "Ctrl+Shift+A",
+        ["Copy selection"] = "Ctrl+Shift+C", ["Paste into terminal"] = "Ctrl+V", ["Select all"] = "Ctrl+A",
         ["Increase font"] = "Ctrl+OemPlus", ["Decrease font"] = "Ctrl+OemMinus"
+    };
+    // Retired default gestures. Saved workspaces that still carry them never customized the
+    // action, so they follow the current default instead of keeping the retired binding.
+    private static readonly Dictionary<string, string> RetiredDefaults = new()
+    {
+        ["Select all"] = "Ctrl+Shift+A"
     };
     private Dictionary<string, string> _shortcuts = new(DefaultShortcuts);
 
@@ -22,6 +29,7 @@ public sealed partial class MainWindow
         if (saved is not null)
             foreach (var pair in saved)
             {
+                if (RetiredDefaults.TryGetValue(pair.Key, out var retired) && pair.Value == retired) continue;
                 if (!result.ContainsKey(pair.Key)) throw new ArgumentException("Unknown shortcut action.");
                 var gesture = KeyGesture.Parse(pair.Value);
                 if ((gesture.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Alt)) == 0)
@@ -54,7 +62,11 @@ public sealed partial class MainWindow
             case "Next prompt": JumpPrompt(1); break;
             case "Copy selection": CopySelection(); break;
             case "Paste into terminal": Paste(); break;
-            case "Select all": _terminal.SelectAll(); break;
+            case "Select all":
+                // While a text box (search box) holds focus, Ctrl+A belongs to it. TerminalKey
+                // only sits on the terminal's route, so not handling here never sends \x01.
+                if (TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is TextBox) return false;
+                _terminal.SelectAll(); break;
             case "Increase font": ChangeFont(1); break;
             case "Decrease font": ChangeFont(-1); break;
         }

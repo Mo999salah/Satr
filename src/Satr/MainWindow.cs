@@ -84,6 +84,7 @@ public sealed partial class MainWindow : Window
         menu.Items.Add(Item(Ui.L("Paste image as file path"), PasteImage));
         menu.Items.Add(Item(Ui.L("Copy folder path"), CopyPath));
         menu.Items.Add(Item(Ui.L("Open folder"), OpenPath));
+        menu.Items.Add(Item(Ui.L("New window"), OpenNewWindow));
         menu.Items.Add(new Separator());
         menu.Items.Add(Item(Ui.L("Reopen finished session"), RestartActive));
         menu.Items.Add(Item(Ui.L("Rename session"), RenameActive));
@@ -92,6 +93,15 @@ public sealed partial class MainWindow : Window
         menu.Items.Add(new Separator());
         more.ContextMenu = menu;
         more.Click += (_, _) => menu.Open(more);
+        // Right-click on the terminal surface. TUI applications that capture the mouse keep
+        // their right-clicks: the same guard as Mouse() swallows the request before the menu.
+        var terminalMenu = new ContextMenu();
+        terminalMenu.Items.Add(Item(Ui.L("Copy selection"), CopySelection));
+        terminalMenu.Items.Add(Item(Ui.L("Paste into terminal"), Paste));
+        terminalMenu.Items.Add(Item(Ui.L("Select all"), () => _terminal.SelectAll()));
+        terminalMenu.Items.Add(new Separator());
+        terminalMenu.Items.Add(Item("Search — Ctrl+Shift+F", OpenSearch));
+        _terminal.ContextMenu = terminalMenu;
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
         actions.Children.Add(Ui.Ghost(Ui.L("Search"), OpenSearch, "Search output — Ctrl+Shift+F"));
         actions.Children.Add(_restartButton = Ui.Ghost(Ui.L("Restart"), RestartActive, "Start or reopen this session"));
@@ -189,6 +199,7 @@ public sealed partial class MainWindow : Window
         _terminal.AddHandler(PointerReleasedEvent, MouseReleased, RoutingStrategies.Tunnel);
         _terminal.AddHandler(PointerMovedEvent, MouseMoved, RoutingStrategies.Tunnel);
         _terminal.AddHandler(PointerWheelChangedEvent, MouseWheel, RoutingStrategies.Tunnel);
+        _terminal.AddHandler(Control.ContextRequestedEvent, TerminalContextRequested, RoutingStrategies.Tunnel);
         _terminal.LinkRequested += async uri => { try { await Launcher.LaunchUriAsync(uri); } catch (Exception ex) { StatusError(ex.Message); } };
         _directoryTimer.Tick += (_, _) => RefreshDirectory();
         PositionChanged += (_, _) => RememberWindow();
@@ -246,6 +257,7 @@ public sealed partial class MainWindow : Window
         commands.AddRange(
         [
             ("New project folder", async () => await ChooseDirectory()),
+            (Ui.L("New window"), OpenNewWindow),
             ("Jump to previous command — Ctrl+Shift+Up", () => JumpPrompt(-1)),
             ("Jump to next command — Ctrl+Shift+Down", () => JumpPrompt(1)),
             ("Search terminal", OpenSearch),
@@ -609,7 +621,8 @@ public sealed partial class MainWindow : Window
         row.Children.Add(Button(Ui.L("Cancel"), () => dialog.Close()));
         row.Children.Add(Button(ok, () => { done = true; dialog.Close(); }));
         panel.Children.Add(row); dialog.Content = panel;
-        var owner = (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.MainWindow;
+        var desktop = Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime;
+        var owner = desktop?.Windows.FirstOrDefault(w => w.IsActive) ?? desktop?.MainWindow;
         if (owner is not null) await dialog.ShowDialog(owner); else dialog.Show();
         return done;
     }
@@ -753,7 +766,8 @@ public sealed partial class MainWindow : Window
         }
         panel.Children.Add(Button(Ui.L("Cancel"), () => dialog.Close()));
         dialog.Content = panel;
-        var owner = (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.MainWindow;
+        var desktop = Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime;
+        var owner = desktop?.Windows.FirstOrDefault(w => w.IsActive) ?? desktop?.MainWindow;
         if (owner is not null) await dialog.ShowDialog(owner); else dialog.Show();
         return picked;
     }
@@ -914,5 +928,17 @@ public sealed partial class MainWindow : Window
     {
         if (Mouse(e, e.Delta.Y > 0 ? 64 : 65, false)) return;
         if (_active is { } tab && tab.Follow) { tab.Follow = false; Status("Review mode — scroll down to return to live output."); }
+    }
+    private void TerminalContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (_active?.Snapshot?.Modes is { MouseTrackingMode: > 0, SgrMouse: true }) e.Handled = true;
+    }
+    private void OpenNewWindow()
+    {
+        // Plain terminal windows are fully independent: no workspace lock, no workspace.json
+        // writes, and their own sessions. The workspace stays single-instance by design.
+        var window = new MainWindow();
+        window.Show();
+        window.Activate();
     }
 }
