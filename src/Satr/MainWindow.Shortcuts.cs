@@ -61,7 +61,11 @@ public sealed partial class MainWindow
             case "Previous prompt": JumpPrompt(-1); break;
             case "Next prompt": JumpPrompt(1); break;
             case "Copy selection": CopySelection(); break;
-            case "Paste into terminal": Paste(); break;
+            case "Paste into terminal":
+                // While a text box holds focus, Ctrl+V belongs to it (paste into the box),
+                // not to the terminal. Returning false lets Avalonia's TextBox handle it.
+                if (TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is TextBox) return false;
+                Paste(); break;
             case "Select all":
                 // While a text box (search box) holds focus, Ctrl+A belongs to it. TerminalKey
                 // only sits on the terminal's route, so not handling here never sends \x01.

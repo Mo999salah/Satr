@@ -8,9 +8,15 @@ internal readonly record struct DirectionalSpan(int Start, int Length, bool IsRi
 internal static class SmartRtl
 {
     public static bool IsRightToLeft(TerminalLine line) => line.ContainsRightToLeft;
-    // Terminal rows always start at column zero. Arabic runs still use UAX #9
-    // ordering inside the LTR row so prompt and cursor coordinates stay stable.
-    public static bool ShouldRightAlign(TerminalLine line, bool smartRtlEnabled, bool preserveTerminalGrid) => false;
+    // Paragraphs whose base direction is RTL read from the right, so with Smart RTL
+    // they start at the right edge. UAX #9 still orders the runs, and the stored
+    // text, cursor coordinates, and alternate-screen grids are untouched.
+    public static bool ShouldRightAlign(TerminalLine line, bool smartRtlEnabled, bool preserveTerminalGrid)
+    {
+        if (!smartRtlEnabled || preserveTerminalGrid || !line.ContainsRightToLeft) return false;
+        var text = string.Concat(line.Runs.Select(run => run.Text));
+        return text.Length > 0 && BaseRightToLeft(text);
+    }
 
     internal static bool ContainsRightToLeft(IReadOnlyList<TerminalRun> runs) =>
         runs.Any(run => run.Text.EnumerateRunes().Any(rune => CharData.BidiClass(rune) is

@@ -13,6 +13,8 @@ var tests = new (string Name, Action Run)[]
     ("modern TUI modes are tracked", ModernTuiModesAreTracked),
     ("emoji grapheme clusters keep terminal width", EmojiClustersKeepWidth),
     ("Persian text remains detectable for Smart RTL", PersianTextRemainsSmartRtl),
+    ("Smart RTL right-aligns only Arabic-base lines", SmartRtlRightAlignsArabicBaseOnly),
+    ("Smart RTL preserves buffer grid coordinates and logical text", SmartRtlPreservesBufferGridAndText),
     ("carriage return is immediate across reads", CarriageReturnIsImmediate),
     ("style changes preserve pending autowrap", StylePreservesWrap),
     ("status redraw clears old characters across reads", StatusRedraw),
@@ -211,6 +213,62 @@ static void PersianTextRemainsSmartRtl()
     Assert(originSpans.Any(span => span.IsRightToLeft) &&
         originSpans.Any(span => !span.IsRightToLeft),
         "LTR-origin mixed line lost RTL spans");
+}
+
+static TerminalLine LineOf(string content)
+{
+    var buffer = new TerminalBuffer(80, 5);
+    return buffer.Process(content).Lines[0];
+}
+
+static void SmartRtlRightAlignsArabicBaseOnly()
+{
+    var arabic = LineOf("مرحبا بالعالم");
+    Assert(arabic.ContainsRightToLeft, "Arabic line lost its RTL runs");
+    Assert(SmartRtl.ShouldRightAlign(arabic, smartRtlEnabled: true, preserveTerminalGrid: false),
+        "Arabic-base line must right-align with Smart RTL enabled");
+    Assert(!SmartRtl.ShouldRightAlign(arabic, smartRtlEnabled: false, preserveTerminalGrid: false),
+        "Smart RTL disabled must keep the Arabic line left-aligned");
+
+    var latin = LineOf("echo hello world");
+    Assert(!latin.ContainsRightToLeft, "Latin line unexpectedly contains RTL runs");
+    Assert(!SmartRtl.ShouldRightAlign(latin, smartRtlEnabled: true, preserveTerminalGrid: false),
+        "Latin/code-first line must stay left-aligned");
+
+    // Mixed line whose base direction is still Arabic: alignment follows the base.
+    var mixed = LineOf("النتيجة: 42 items");
+    Assert(SmartRtl.ShouldRightAlign(mixed, smartRtlEnabled: true, preserveTerminalGrid: false),
+        "Arabic-base mixed line must follow the paragraph base direction");
+
+    // Mixed line whose base direction is Latin: stays left.
+    var latinMixed = LineOf("result: القيمة");
+    Assert(!SmartRtl.ShouldRightAlign(latinMixed, smartRtlEnabled: true, preserveTerminalGrid: false),
+        "Latin-base mixed line must stay left-aligned");
+
+    // Alternate screen always preserves the terminal grid.
+    Assert(!SmartRtl.ShouldRightAlign(arabic, smartRtlEnabled: true, preserveTerminalGrid: true),
+        "alternate-screen grid must never be right-aligned");
+}
+
+static void SmartRtlPreservesBufferGridAndText()
+{
+    // Buffer-level contract only. Whether the active cursor/input line is right-aligned
+    // is a TerminalView.Layout decision and is covered by Satr.UiChecks.
+    // `$` is bidi class ET, not a strong LTR character, so "$ مرحبا" is an Arabic-base
+    // paragraph with the cursor parked at its terminal grid column.
+    var buffer = new TerminalBuffer(40, 5);
+    var snapshot = buffer.Process("$ مرحبا");
+    Assert(snapshot.CursorRow == 0 && snapshot.CursorColumn == 7,
+        $"cursor left the terminal grid at {snapshot.CursorRow},{snapshot.CursorColumn}");
+
+    // Logical text (selection/copy) is unchanged by alignment decisions.
+    var text = TerminalBuffer.LogicalText(snapshot);
+    Assert(text.Contains("مرحبا"), "Arabic content must survive ingestion verbatim");
+    Assert(text.Contains("$ "), "prompt prefix must keep its logical position");
+    var lineText = TerminalBuffer.LogicalText(
+        new TerminalBuffer(80, 3).Process("خروج\nexit"));
+    Assert(lineText.IndexOf("خروج") < lineText.IndexOf("exit"),
+        "logical row order must be preserved (no visual reordering in stored text)");
 }
 
 static void CarriageReturnIsImmediate()

@@ -24,6 +24,15 @@ class UiChecks : Application
     private static object Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!.GetValue(target)!;
     private static void Call(MainWindow window, string name, params object[] args) => typeof(MainWindow).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, args);
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
+    // TerminalView row geometry is internal to the view; reflection is the intended
+    // test seam so no production API is widened just for coverage. The returned
+    // cells expose (Start, Length, X, Width, Column, Columns) as public properties.
+    private static double RowX(TerminalView view, int row)
+    {
+        var layout = typeof(TerminalView).GetMethod("Layout", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(view, new object[] { row })!;
+        var cells = (System.Collections.IEnumerable)layout.GetType().GetProperty("Cells")!.GetValue(layout)!;
+        return cells.Cast<object>().Select(cell => (double)cell.GetType().GetProperty("X")!.GetValue(cell)!).DefaultIfEmpty(0).Min();
+    }
     private static void Shot(Window window, string name)
     {
         using var bitmap = new RenderTargetBitmap(new PixelSize((int)window.Bounds.Width, (int)window.Bounds.Height));
@@ -112,6 +121,47 @@ class UiChecks : Application
                 await Task.Delay(500);
                 Check(((ListBoxItem)list.Items[0]!).Bounds.Height > 0, "Project sessions must remain laid out after resize.");
                 Shot(window, "running-narrow");
+                // BEL attention: inactive tab + BEL → NeedsAttention; selecting clears it.
+                var tabs = (System.Collections.IList)typeof(MainWindow).GetField("_tabs", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                var bellTab = tabs.Cast<object>().FirstOrDefault(t => !ReferenceEquals(t, Field(window, "_active")));
+                if (bellTab is not null)
+                {
+                    var tabType = bellTab.GetType();
+                    var priorAwaiting = (bool)tabType.GetField("AwaitingLaunch")!.GetValue(bellTab)!;
+                    tabType.GetField("AwaitingLaunch")!.SetValue(bellTab, false);
+                    tabType.GetField("NeedsAttention")!.SetValue(bellTab, true);
+                    typeof(MainWindow).GetMethod("UpdateTab", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, new[] { bellTab });
+                    var detail = (TextBlock?)tabType.GetField("Detail")!.GetValue(bellTab);
+                    Check((detail?.Text ?? "").Contains("attention", StringComparison.OrdinalIgnoreCase),
+                        "BEL on inactive tab must set 'Needs attention' in Detail text.");
+                    tabType.GetField("AwaitingLaunch")!.SetValue(bellTab, priorAwaiting);
+                    var savedActive = Field(window, "_active");
+                    typeof(MainWindow).GetMethod("Select", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, new[] { bellTab });
+                    Check(!(bool)tabType.GetField("NeedsAttention")!.GetValue(bellTab)!,
+                        "Selecting the tab must clear NeedsAttention.");
+                    typeof(MainWindow).GetMethod("Select", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, new[] { savedActive });
+                }
+                // Smart RTL cursor-row override: an Arabic-base cursor line keeps its
+                // terminal-grid columns, while the same paragraph right-aligns when its
+                // row is not the visible cursor row.
+                var rtlView = (TerminalView)Field(window, "_terminal");
+                // A fresh buffer keeps the row contract deterministic and independent of
+                // whatever the live session already printed.
+                var rtlBuffer = new TerminalBuffer(80, 5);
+                var cursorSnapshot = rtlBuffer.Process("مرحبا بالعالم");
+                rtlView.Present(cursorSnapshot, smartRtl: true, cellWidth: 8.5, lineHeight: 18, followOutput: false);
+                await Task.Delay(200);
+                Check(Math.Abs(RowX(rtlView, cursorSnapshot.CursorRow)) < 0.5,
+                    "Visible cursor row must stay grid-aligned despite an Arabic-base paragraph.");
+                // Arabic on row 0, then move the cursor to row 1 so the Arabic row is no
+                // longer the cursor row and the paragraph is free to right-align.
+                var nonCursorSnapshot = rtlBuffer.Process("\r\nplain");
+                Check(nonCursorSnapshot.CursorRow == 1 && nonCursorSnapshot.Lines.Count > 1,
+                    "Arabic row must sit above the cursor row for a valid non-cursor comparison.");
+                rtlView.Present(nonCursorSnapshot, smartRtl: true, cellWidth: 8.5, lineHeight: 18, followOutput: false);
+                await Task.Delay(200);
+                Check(RowX(rtlView, 0) > 0.5,
+                    "Arabic-base row must right-align when it is not the visible cursor row.");
                 Call(window, "OpenSearch");
                 await Task.Delay(300); Shot(window, "search-narrow");
                 Call(window, "CloseSearch");
@@ -142,12 +192,67 @@ class UiChecks : Application
                 var menuText = terminalMenu is null ? "" : string.Join("\n", terminalMenu.Items.OfType<MenuItem>().Select(i => i.Header?.ToString() ?? ""));
                 foreach (var action in new[] { "copy", "paste", "select", "search" })
                     Check(menuText.Contains(action, StringComparison.OrdinalIgnoreCase), $"Terminal menu must expose {action} on every platform.");
+                // Mouse tracking context menu bypass:
+                // Normal right-click inside a mouse-tracking TUI is swallowed so the TUI gets the event;
+                // Shift + right-click bypasses mouse tracking to open Satr's context menu.
+                var activeTab = Field(window, "_active");
+                var tabBuffer = (TerminalBuffer)Field(activeTab, "Buffer");
+                var tabSnapshotField = activeTab.GetType().GetField("Snapshot")!;
+                var origSnapshot = tabSnapshotField.GetValue(activeTab);
+                var mouseSnap = tabBuffer.Process("\x1b[?1000h\x1b[?1006h");
+                tabSnapshotField.SetValue(activeTab, mouseSnap);
+                var termView = (TerminalView)Field(window, "_terminal");
+                typeof(MainWindow).GetField("_shiftRightClick", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, false);
+                var normalReq = new Avalonia.Input.ContextRequestedEventArgs();
+                Call(window, "TerminalContextRequested", termView, normalReq);
+                Check(normalReq.Handled, "Normal right-click in mouse-tracking TUI must be swallowed.");
+                typeof(MainWindow).GetField("_shiftRightClick", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+                var shiftReq = new Avalonia.Input.ContextRequestedEventArgs();
+                Call(window, "TerminalContextRequested", termView, shiftReq);
+                Check(!shiftReq.Handled, "Shift + right-click in mouse-tracking TUI must bypass tracking and allow context menu.");
+                Check(!(bool)typeof(MainWindow).GetField("_shiftRightClick", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!, "_shiftRightClick must be consumed and cleared.");
+                tabSnapshotField.SetValue(activeTab, origSnapshot);
+                tabBuffer.Process("\x1b[?1000l\x1b[?1006l");
+                var cleanReq = new Avalonia.Input.ContextRequestedEventArgs();
+                Call(window, "TerminalContextRequested", termView, cleanReq);
+                Check(!cleanReq.Handled, "Normal right-click outside mouse tracking must not be swallowed.");
                 var toggle = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => Avalonia.Automation.AutomationProperties.GetName(b) == "Toggle sidebar");
                 Check(toggle is not null, "Sidebar toggle must be available on every platform.");
                 Check(((Border)Field(window, "_sidebar")).IsVisible, "Sidebar must be visible by default.");
                 Call(window, "OpenSearch");
                 Check(((Border)Field(window, "_searchPanel")).IsVisible, "Search must open on every platform.");
                 Call(window, "CloseSearch");
+                // Chrome flow: without Arabic UI mode the shell window must be LTR.
+                Check(window.FlowDirection == Avalonia.Media.FlowDirection.LeftToRight,
+                    "Non-Arabic window must have LeftToRight flow direction.");
+                // Arabic mode: a window constructed with Ui.Arabic=true must be RTL;
+                // its TerminalView and every TextBox must remain LTR.
+                var uiType = typeof(MainWindow).Assembly.GetType("Satr.Ui")!;
+                var arabicField = uiType.GetField("Arabic", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!;
+                var priorArabic = (bool)arabicField.GetValue(null)!;
+                try
+                {
+                    arabicField.SetValue(null, true);
+                    Call(window, "OpenNewWindow");
+                    await Task.Delay(1500);
+                    var arabicWin = desktop.Windows.OfType<MainWindow>().First(w => !ReferenceEquals(w, window));
+                    Check(arabicWin.FlowDirection == Avalonia.Media.FlowDirection.RightToLeft,
+                        "Arabic-mode window must have RightToLeft flow direction.");
+                    var arabicTerminal = (TerminalView)Field(arabicWin, "_terminal");
+                    Check(arabicTerminal.FlowDirection == Avalonia.Media.FlowDirection.LeftToRight,
+                        "Terminal inside Arabic-mode window must remain LeftToRight.");
+                    var arabicSearch = (Avalonia.Controls.TextBox)Field(arabicWin, "_search");
+                    Check(arabicSearch.FlowDirection == Avalonia.Media.FlowDirection.LeftToRight,
+                        "Search TextBox inside Arabic-mode window must remain LeftToRight.");
+                    var arabicActive = Field(arabicWin, "_active");
+                    await ((IAsyncDisposable)Field(arabicActive, "Session")).DisposeAsync();
+                    await Task.Delay(200);
+                    typeof(MainWindow).GetMethod("CloseTabAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(arabicWin, new[] { arabicActive, (object)true });
+                    await Task.Delay(300);
+                    arabicWin.Close();
+                    for (var i = 0; i < 20 && desktop.Windows.OfType<MainWindow>().Count() > 1; i++) await Task.Delay(100);
+                }
+                finally { arabicField.SetValue(null, priorArabic); }
                 Call(window, "OpenNewWindow");
                 await Task.Delay(1500);
                 var satr = desktop.Windows.OfType<MainWindow>().ToArray();

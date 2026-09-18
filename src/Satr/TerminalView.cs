@@ -49,6 +49,7 @@ public sealed class TerminalView : ContentControl
     public TerminalView()
     {
         Focusable = true;
+        FlowDirection = FlowDirection.LeftToRight;
         Avalonia.Automation.AutomationProperties.SetName(this, "Satr terminal — drag to select, Shift+drag while captured, Ctrl+Click for links");
         ToolTip.SetTip(this, "Shift+drag selects while captured • Ctrl+Click opens links");
         _surface = new Surface(this) { VerticalAlignment = VerticalAlignment.Top };
@@ -311,7 +312,12 @@ public sealed class TerminalView : ContentControl
              cached.Source.CellLength == line.CellLength && cached.Source.Runs.SequenceEqual(line.Runs)))
             return cached;
         var text = Text(line);
-        var rightAlign = SmartRtl.ShouldRightAlign(line, _smartRtl, _snapshot.Modes.AlternateScreen);
+        // The active cursor/input line keeps terminal-grid coordinates: right-aligning it
+        // would move the caret and in-cell edits away from their PTY columns.
+        var isCursorRow = _snapshot.CursorVisible && row == _snapshot.CursorRow &&
+            !_snapshot.Modes.AlternateScreen;
+        var rightAlign = !isCursorRow &&
+            SmartRtl.ShouldRightAlign(line, _smartRtl, _snapshot.Modes.AlternateScreen);
         var spans = _smartRtl && line.ContainsRightToLeft
             ? SmartRtl.GetDirectionalSpans(text, rightAlign)
             : text.Length == 0 ? [] : new[] { new DirectionalSpan(0, text.Length, false) };

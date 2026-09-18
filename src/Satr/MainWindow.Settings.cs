@@ -10,6 +10,9 @@ public sealed partial class MainWindow
 {
     private Window? _settingsWindow;
     private ListBox? _settingsNavigation;
+    // Cache the process-wide system monospace probe: enumerating every installed family
+    // and shaping a sample per family dominates Settings open time.
+    private static string[]? _monospaceFonts;
     private void ShowSettings() => OpenSettings(0);
 
     private async void OpenSettings(int section)
@@ -35,8 +38,16 @@ public sealed partial class MainWindow
             pages.Add(panel); return panel;
         }
         var terminal = Page(Ui.L("Terminal"), Ui.L("Font settings apply to all sessions."));
-        var fonts = FontManager.Current.SystemFonts.Select(f => f.Name).Where(IsMonospaceFont).Append(_terminal.FontFamily.Name).Append(_defaultTerminalFont).Distinct().Order().ToArray();
-        var family = new ComboBox { Name = "SettingsFont", ItemsSource = fonts, SelectedItem = _terminal.FontFamily.Name, HorizontalAlignment = HorizontalAlignment.Stretch };
+        // Seed with only the current and default fonts; the full system scan runs on
+        // first dropdown open so creating Settings stays fast.
+        var family = new ComboBox { Name = "SettingsFont", ItemsSource = new[] { _terminal.FontFamily.Name, _defaultTerminalFont }.Distinct().ToArray(), SelectedItem = _terminal.FontFamily.Name, HorizontalAlignment = HorizontalAlignment.Stretch };
+        family.DropDownOpened += (_, _) =>
+        {
+            _monospaceFonts ??= FontManager.Current.SystemFonts.Select(f => f.Name).Where(IsMonospaceFont).ToArray();
+            var selected = family.SelectedItem;
+            family.ItemsSource = _monospaceFonts.Append(_terminal.FontFamily.Name).Append(_defaultTerminalFont).Distinct().Order().ToArray();
+            family.SelectedItem = selected;
+        };
         var size = new NumericUpDown { Name = "SettingsFontSize", Minimum = 10, Maximum = 32, Value = (decimal)_terminal.FontSize };
         terminal.Children.Add(new TextBlock { Text = Ui.L("Monospace font") }); terminal.Children.Add(family);
         terminal.Children.Add(new TextBlock { Text = Ui.L("Font size") }); terminal.Children.Add(size);

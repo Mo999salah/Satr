@@ -29,7 +29,7 @@ public sealed partial class MainWindow : Window
     private readonly bool _workspaceMode;
     private FileStream? _instanceLock;
     private Tab? _active;
-    private bool _loading, _saveEnabled, _closed, _closing, _smartRtl = true, _restoredFromBackup;
+    private bool _loading, _saveEnabled, _closed, _closing, _smartRtl = true, _restoredFromBackup, _shiftRightClick;
     private double _cellWidth = 9.6, _lineHeight = 24;
     private string _directory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
@@ -47,7 +47,7 @@ public sealed partial class MainWindow : Window
         public string? ConversationId;
         public LaunchPlan? Launch;
         public bool Transient;
-        public bool Failed;
+        public bool Failed, NeedsAttention;
         public bool Rtl = rtl, Starting, Closed, Finished, Dirty = true, Follow = true, AwaitingLaunch;
         public int Columns = 80, Rows = 24;
         public TerminalBuffer Buffer = new(80, 24);
@@ -509,6 +509,7 @@ public sealed partial class MainWindow : Window
         if (tab.Session is null && !tab.Starting && !tab.Finished &&
             ShouldAutoStart(tab.Profile, IsLaunchable(tab.Profile), tab.AwaitingLaunch))
             Start(tab);
+        tab.NeedsAttention = false;
         UpdateTab(tab);
         Persist();
     }
@@ -529,7 +530,15 @@ public sealed partial class MainWindow : Window
             session.Output += async text =>
             {
                 TerminalSnapshot snapshot;
-                lock (tab) { snapshot = tab.Buffer.Process(text); tab.Snapshot = snapshot; tab.Dirty = true; }
+                bool bellForInactive;
+                lock (tab)
+                {
+                    snapshot = tab.Buffer.Process(text);
+                    tab.Snapshot = snapshot; tab.Dirty = true;
+                    bellForInactive = text.Contains('\a') && !ReferenceEquals(_active, tab) && !tab.NeedsAttention;
+                    if (bellForInactive) tab.NeedsAttention = true;
+                }
+                if (bellForInactive) Dispatcher.UIThread.Post(() => { if (!tab.Closed && !_closed) UpdateTab(tab); });
                 if (snapshot.Responses.Count > 0) await session.WriteResponsesAsync(snapshot.Responses);
             };
             session.Ended += message => Dispatcher.UIThread.Post(() =>
@@ -915,9 +924,14 @@ public sealed partial class MainWindow : Window
     private void MousePressed(object? sender, PointerPressedEventArgs e)
     {
         var p = e.GetCurrentPoint(_terminal).Properties;
+        if (p.IsRightButtonPressed) _shiftRightClick = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         _terminal.Focus(); Mouse(e, p.IsLeftButtonPressed ? 0 : p.IsMiddleButtonPressed ? 1 : 2, false);
     }
-    private void MouseReleased(object? sender, PointerReleasedEventArgs e) => Mouse(e, e.InitialPressMouseButton == MouseButton.Left ? 0 : e.InitialPressMouseButton == MouseButton.Middle ? 1 : 2, true);
+    private void MouseReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (e.InitialPressMouseButton == MouseButton.Right && e.KeyModifiers.HasFlag(KeyModifiers.Shift)) _shiftRightClick = true;
+        Mouse(e, e.InitialPressMouseButton == MouseButton.Left ? 0 : e.InitialPressMouseButton == MouseButton.Middle ? 1 : 2, true);
+    }
     private void MouseMoved(object? sender, PointerEventArgs e)
     {
         var p = e.GetCurrentPoint(_terminal).Properties;
@@ -932,6 +946,8 @@ public sealed partial class MainWindow : Window
     }
     private void TerminalContextRequested(object? sender, ContextRequestedEventArgs e)
     {
+        var shift = _shiftRightClick; _shiftRightClick = false;
+        if (shift) return;
         if (_active?.Snapshot?.Modes is { MouseTrackingMode: > 0, SgrMouse: true }) e.Handled = true;
     }
     private void OpenNewWindow()

@@ -96,9 +96,9 @@ public sealed partial class MainWindow
     {
         if (tab.Closed || _closed) return;
         var name = string.IsNullOrWhiteSpace(tab.CustomTitle) ? TabTitle(tab.Profile, tab.Project) : $"\u2068{tab.CustomTitle}\u2069";
-        tab.Pip.Background = tab.Failed ? Ui.Danger : tab.Finished ? Ui.Muted : tab.Starting ? Ui.Warning : tab.AwaitingLaunch ? Ui.Muted : Ui.Accent;
+        tab.Pip.Background = tab.Failed ? Ui.Danger : tab.Finished ? Ui.Muted : tab.Starting ? Ui.Warning : tab.AwaitingLaunch ? Ui.Muted : tab.NeedsAttention ? Ui.Warning : Ui.Accent;
         tab.Label.Text = string.IsNullOrWhiteSpace(tab.CustomTitle) ? ProfileCatalog.TabLabelOf(tab.Profile) : name;
-        tab.Detail.Text = ProfileCatalog.TabLabelOf(tab.Profile) + " · " + (tab.Failed ? "Failed" : tab.Finished ? "Ended" : tab.Starting ? "Starting" : tab.AwaitingLaunch ? "Ready" : "Running");
+        tab.Detail.Text = ProfileCatalog.TabLabelOf(tab.Profile) + " · " + (tab.Failed ? "Failed" : tab.Finished ? "Ended" : tab.Starting ? "Starting" : tab.AwaitingLaunch ? "Ready" : tab.NeedsAttention ? "Needs attention" : "Running");
         AutomationProperties.SetName(tab.Header, name + ", " + tab.State);
         ToolTip.SetTip(tab.Header, tab.Project + "\n" + tab.Directory + "\n" + tab.State + "\nRight-click: rename, folder, kill");
         if (ReferenceEquals(_active, tab)) Status(tab.State + " • " + tab.Profile);
@@ -155,7 +155,7 @@ public sealed partial class MainWindow
             lock (tab)
             {
                 tab.Buffer = new TerminalBuffer(tab.Columns, tab.Rows, _scrollbackRows);
-                tab.Snapshot = null; tab.Dirty = true; tab.Finished = false; tab.Failed = false; tab.SynchronizedSince = 0;
+                tab.Snapshot = null; tab.Dirty = true; tab.Finished = false; tab.Failed = false; tab.NeedsAttention = false; tab.SynchronizedSince = 0;
             }
             tab.Offset = 0; tab.Selection = (null, null); tab.Follow = true;
             if (_active == tab) { _terminal.Clear(); Render(); }

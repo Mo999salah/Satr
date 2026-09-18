@@ -70,6 +70,6 @@ internal static partial class Ui
         window.Foreground = Text;
         window.FontFamily = Interface;
         window.FontSize = 14;
-        window.FlowDirection = FlowDirection.LeftToRight;
+        window.FlowDirection = Arabic ? FlowDirection.RightToLeft : FlowDirection.LeftToRight;
     }
 }
