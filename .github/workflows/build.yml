@@ -1,14 +1,12 @@
 name: Build and release
+# main is development: pushes and PRs only validate. Stable artifacts publish
+# solely from vX.Y.Z tags, and every release job builds that same tag commit.
 on:
   push:
     branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing vX.Y.Z tag to rebuild and publish
-        required: false
 permissions:
   contents: read
 jobs:
@@ -19,8 +17,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -43,23 +39,25 @@ jobs:
     # Linux deliverables only build on Linux: the tarball needs real Unix modes and the
     # DEB/Pacman packages need dpkg-deb, makepkg and repo-add. Building them on the
     # Windows runner silently produced a 0666 tarball and no packages at all.
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    # Release deliverables only build from tags, and only from the tag commit itself:
+    # every job checks out the triggering ref with no overrides, so Windows and Linux
+    # artifacts for vX.Y.Z always originate from the same commit. If packaging tooling
+    # is broken in a tag, the recovery path is a new fixed tag, never mixing revisions.
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Refresh the packaging tooling
-        # A tag cut before a packaging fix carries tooling that no longer runs on the current
-        # runner, so an in-flight release can never be finished from that tag alone. Refresh
-        # only the build script; every shipped file still comes from the tag being released.
+      - name: Validate tag matches project version
         run: |
-          git fetch --depth=1 origin "${{ github.event.repository.default_branch }}"
-          git checkout FETCH_HEAD -- packaging/linux-packages.sh
+          set -euo pipefail
+          version="$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' src/Satr/Satr.csproj | head -n1)"
+          test -n "$version"
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME does not match project version $version." >&2; exit 1; }
+          echo "Release $GITHUB_REF_NAME matches project version $version from the tag commit."
       - name: Install packaging tools
         run: |
           sudo apt-get update
@@ -75,6 +73,8 @@ jobs:
         env:
           # Pacman's dependency check cannot resolve Arch package names on a Debian runner.
           SATR_MAKEPKG_NODEPS: '1'
+          SatrChannel: 'Release'
+          SatrCommit: ${{ github.sha }}
         run: |
           set -euo pipefail
           version="$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' src/Satr/Satr.csproj | head -n1)"
@@ -97,23 +97,30 @@ jobs:
             artifacts/satr.db*
             artifacts/satr.files*
   publish:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [test, linux]
     runs-on: windows-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Validate tag matches project version
+        shell: pwsh
+        run: |
+          $version = ([xml](Get-Content src/Satr/Satr.csproj -Raw)).Project.PropertyGroup.Version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag $($env:GITHUB_REF_NAME) does not match project version $version." }
+          Write-Host "Release $($env:GITHUB_REF_NAME) matches project version $version from the tag commit."
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
       - name: Build Windows packages and installer
         shell: pwsh
+        env:
+          SatrChannel: 'Release'
+          SatrCommit: ${{ github.sha }}
         run: ./scripts/Build.ps1 -Compiler "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
       - name: Add Linux deliverables
         # Overwrites the Linux tarball that Build.ps1 produced on Windows, so the release
@@ -157,7 +164,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $tag = $env:RELEASE_TAG
           if ($tag -notmatch '^v\d') { throw "Refusing to publish a release for '$tag'." }
@@ -172,11 +179,16 @@ jobs:
 
           # The REST endpoint for a tag never returns a draft, so ask the CLI instead: it finds
           # the draft an earlier attempt left behind and no second release is created.
+          # Never mutate a published release: re-running a tag only retries its own
+          # in-flight draft. A bugfix must become a new patch version, never a
+          # rebuild of already-published binaries.
+          $isDraft = ''
           $exists = $true
           try {
-            gh release view $tag --json tagName 2>$null | Out-Null
+            $isDraft = gh release view $tag --json isDraft --jq '.isDraft' 2>$null
             if ($LASTEXITCODE -ne 0) { $exists = $false }
           } catch { $exists = $false }
+          if ($exists -and $isDraft -ne 'true') { throw "Release $tag is already published; refusing to replace its binaries." }
           if (-not $exists) {
             $create = @('release', 'create', $tag, '--draft', '--title', $tag, '--generate-notes', '--verify-tag')
             if ($tag -match '-') { $create += '--prerelease' }

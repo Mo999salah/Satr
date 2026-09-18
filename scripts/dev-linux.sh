@@ -27,6 +27,10 @@ fi
 "$dotnet_command" run --project "$root/tests/Satr.PortChecks/Satr.PortChecks.csproj" -c Release --nologo
 
 publish="$root/artifacts/linux-dev"
+# Development identity: the channel stays Development (the csproj default) so a
+# dev install never looks like a stable release; stamp the source commit only.
+commit="$(git -C "$root" rev-parse --short HEAD 2>/dev/null || true)"
+export SatrCommit="${commit:-unknown}"
 "$dotnet_command" publish "$root/src/Satr/Satr.csproj" -c Release -r linux-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o "$publish" --nologo
 
 data_root="${XDG_DATA_HOME:-$HOME/.local/share}"

@@ -63,7 +63,8 @@ public sealed partial class MainWindow : Window
     {
         _startupCommand = startupCommand;
         _workspaceMode = workspaceMode;
-        Title = "Satr"; Width = 1220; Height = 820; MinWidth = 680; MinHeight = 540;
+        // Development builds (local runs and satr-dev installs) must never look like stable releases.
+        Title = BuildInfo.IsDevelopment ? "Satr — Development" : "Satr"; Width = 1220; Height = 820; MinWidth = 680; MinHeight = 540;
         Icon = new WindowIcon(Avalonia.Platform.AssetLoader.Open(new Uri("avares://Satr/Satr.ico")));
         Ui.Paint(this); FontSize = 13;
         var fresh = Ui.Ghost(Ui.L("New"), () => { }, "New session — Ctrl+Shift+T for shell, Ctrl+Shift+P for all types");

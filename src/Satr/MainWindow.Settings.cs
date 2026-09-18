@@ -79,7 +79,10 @@ public sealed partial class MainWindow
             foreach (var pair in shortcutRows) pair.Value.IsVisible = (Ui.L(pair.Key) + " " + shortcutEdits[pair.Key].Text).Contains(query.Text?.Trim() ?? "", StringComparison.OrdinalIgnoreCase);
         };
         var about = Page("سطر / Satr", Ui.L("A project terminal for Arabic, mixed text, and command-line tools."));
-        about.Children.Add(new TextBlock { Text = $"Version {TerminalBuffer.ProductVersion}\nMohamad Salah\n\nWindows / Linux · Avalonia\nTerminal engine derived from RtlTerminal under MIT; see licenses.\n\nAI-tool compatibility varies by tool and version.", TextWrapping = TextWrapping.Wrap });
+        var identity = BuildInfo.IsDevelopment
+            ? $"{BuildInfo.Summary}\nDevelopment build — not a stable release."
+            : BuildInfo.Summary;
+        about.Children.Add(new TextBlock { Text = $"{identity}\nMohamad Salah\n\nWindows / Linux · Avalonia\nTerminal engine derived from RtlTerminal under MIT; see licenses.\n\nAI-tool compatibility varies by tool and version.", TextWrapping = TextWrapping.Wrap });
         var tools = Page(Ui.L("Installed tools"), Ui.L("Check the tools available to this Satr process. Installation and authentication stay with each tool."));
         var toolList = new StackPanel { Spacing = 12 }; tools.Children.Add(toolList);
         void CheckTools()
@@ -95,6 +98,7 @@ public sealed partial class MainWindow
         tools.Children.Add(Button(Ui.L("Check again"), CheckTools)); CheckTools();
         tools.Children.Add(new TextBlock { Text = Ui.L("Restart Satr if an installer changed PATH."), TextWrapping = TextWrapping.Wrap, Foreground = Ui.Muted });
         var diagnostics = Page(Ui.L("Diagnostics"), Ui.L("Recent errors in this window. Review before sharing: messages can contain local paths."));
+        diagnostics.Children.Add(new TextBlock { Text = BuildInfo.Summary, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Muted });
         var errorText = new TextBox { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 180, Text = string.Join("\n", _errors) };
         diagnostics.Children.Add(errorText);
         diagnostics.Children.Add(Button(Ui.L("Refresh"), () => errorText.Text = string.Join("\n", _errors)));

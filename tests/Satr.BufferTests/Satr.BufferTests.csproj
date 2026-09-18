@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\src\Satr\TerminalBuffer.cs" Link="TerminalBuffer.cs" />
+    <Compile Include="..\..\src\Satr\BuildInfo.cs" Link="BuildInfo.cs" />
     <Compile Include="..\..\src\Satr\SmartRtl.cs" Link="SmartRtl.cs" />
     <Compile Include="..\..\src\Satr\ArabicInput.cs" Link="ArabicInput.cs" />
     <Compile Include="..\..\src\Satr\Utf8OutputDecoder.cs" Link="Utf8OutputDecoder.cs" />

@@ -19,6 +19,10 @@ function Invoke-Dotnet([string[]]$Arguments) {
 
 Invoke-Dotnet -Arguments @('run', '--project', (Join-Path $root 'tests/Satr.BufferTests/Satr.BufferTests.csproj'), '-c', 'Release', '--nologo')
 Invoke-Dotnet -Arguments @('run', '--project', (Join-Path $root 'tests/Satr.PortChecks/Satr.PortChecks.csproj'), '-c', 'Release', '--nologo')
+# Development identity: the channel stays Development (the csproj default) so a
+# dev install never looks like a stable release; stamp the source commit only.
+$commit = try { (git -C $root rev-parse --short HEAD 2>$null).Trim() } catch { '' }
+$env:SatrCommit = if ([string]::IsNullOrWhiteSpace($commit)) { 'unknown' } else { $commit }
 Invoke-Dotnet -Arguments @('publish', $project, '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:DebugType=None', '-p:DebugSymbols=false', '-o', $publish, '--nologo')
 
 $running = @(Get-Process -Name Satr -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $target 'Satr.exe') })

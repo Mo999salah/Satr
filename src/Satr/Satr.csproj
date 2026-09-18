@@ -9,7 +9,15 @@
     <Authors>Mohamad Salah</Authors>
     <Product>Satr</Product>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- Build identity: release CI sets SatrChannel=Release and SatrCommit=<sha> via the
+         environment; local and dev builds keep the Development default. -->
+    <SatrChannel Condition="'$(SatrChannel)' == ''">Development</SatrChannel>
+    <SatrCommit Condition="'$(SatrCommit)' == ''">unknown</SatrCommit>
   </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="SatrChannel" Value="$(SatrChannel)" />
+    <AssemblyMetadata Include="SatrCommit" Value="$(SatrCommit)" />
+  </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Satr.PortChecks" />
     <AvaloniaResource Include="Satr.ico" />

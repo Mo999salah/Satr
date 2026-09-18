@@ -134,8 +134,20 @@ class UiChecks : Application
                 Check(WorkspaceStore.Load(WorkspaceStore.StatePath).Projects!.Length == projectsBefore, "Closing a session must preserve its project.");
                 var defaults = (System.Collections.Generic.Dictionary<string, string>)typeof(MainWindow).GetField("DefaultShortcuts", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)!.GetValue(null)!;
                 Check(defaults["Select all"] == "Ctrl+A", "Ctrl+A must select all at the application level.");
+                // Shared-UI parity: these actions must exist with the same shortcuts on Windows and Linux.
+                Check(defaults.TryGetValue("Copy selection", out var copyGesture) && copyGesture.Length > 0, "Copy must have a shortcut on every platform.");
+                Check(defaults.TryGetValue("Paste into terminal", out var pasteGesture) && pasteGesture.Length > 0, "Paste must have a shortcut on every platform.");
+                Check(defaults.TryGetValue("Search", out var searchGesture) && searchGesture.Length > 0, "Search must have a shortcut on every platform.");
                 var terminalMenu = ((TerminalView)Field(window, "_terminal")).ContextMenu;
-                Check(terminalMenu is not null && terminalMenu.Items.Count(i => i is MenuItem) == 4, "Terminal needs a right-click menu: copy, paste, select all, search.");
+                var menuText = terminalMenu is null ? "" : string.Join("\n", terminalMenu.Items.OfType<MenuItem>().Select(i => i.Header?.ToString() ?? ""));
+                foreach (var action in new[] { "copy", "paste", "select", "search" })
+                    Check(menuText.Contains(action, StringComparison.OrdinalIgnoreCase), $"Terminal menu must expose {action} on every platform.");
+                var toggle = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => Avalonia.Automation.AutomationProperties.GetName(b) == "Toggle sidebar");
+                Check(toggle is not null, "Sidebar toggle must be available on every platform.");
+                Check(((Border)Field(window, "_sidebar")).IsVisible, "Sidebar must be visible by default.");
+                Call(window, "OpenSearch");
+                Check(((Border)Field(window, "_searchPanel")).IsVisible, "Search must open on every platform.");
+                Call(window, "CloseSearch");
                 Call(window, "OpenNewWindow");
                 await Task.Delay(1500);
                 var satr = desktop.Windows.OfType<MainWindow>().ToArray();

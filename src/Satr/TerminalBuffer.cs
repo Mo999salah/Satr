@@ -58,7 +58,9 @@ public sealed record TerminalSnapshot(
 
 public sealed class TerminalBuffer
 {
-    public const string ProductVersion = "0.4.2";
+    // Single-sourced from the built assembly (see BuildInfo) so the tag, the
+    // project version, and the XTVERSION response can never drift apart.
+    public static string ProductVersion => BuildInfo.Version;
     private const int DefaultMaximumScrollbackRows = 2000;
     private const int MaximumClusterCharacters = 256;
     private static readonly TerminalColor[] AnsiColors =
