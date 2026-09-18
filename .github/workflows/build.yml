@@ -187,7 +187,11 @@ jobs:
 
           # GitHub's asset endpoint fails on multi-megabyte uploads often enough that a single
           # blind attempt is not viable, and parallel uploads make the gateway timeouts worse.
-          foreach ($name in $names) {
+          # The checksum manifest is an asset of its own, but the list never contains itself:
+          # upload it explicitly and verify the copy that reaches the release.
+          $expected['SHA256SUMS.txt'] = (Get-FileHash 'artifacts/SHA256SUMS.txt' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $uploads = $names + 'SHA256SUMS.txt'
+          foreach ($name in $uploads) {
             $uploaded = $false
             for ($attempt = 1; $attempt -le 4 -and -not $uploaded; $attempt++) {
               $uploaded = $true
@@ -209,11 +213,11 @@ jobs:
             $remote[$parts[0]] = $parts[1] -replace '^sha256:', ''
           }
           if ($remote.Count -eq 0) { throw "Could not read back the assets of release $tag." }
-          foreach ($name in $names) {
+          foreach ($name in $uploads) {
             if (-not $remote.ContainsKey($name)) { throw "Release $tag is missing asset $name." }
             if ($remote[$name] -ne $expected[$name]) { throw "Digest mismatch on $name ($($remote[$name]))." }
           }
-          Write-Host "Verified $($names.Count) release assets against SHA256SUMS.txt."
+          Write-Host "Verified $($uploads.Count) release assets against SHA256SUMS.txt."
 
           $edit = @('release', 'edit', $tag, '--draft=false')
           if ($tag -match '-') { $edit += '--prerelease' } else { $edit += '--latest' }
