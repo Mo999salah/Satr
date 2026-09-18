@@ -53,8 +53,19 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Refresh the packaging tooling
+        # A tag cut before a packaging fix carries tooling that no longer runs on the current
+        # runner, so an in-flight release can never be finished from that tag alone. Refresh
+        # only the build script; every shipped file still comes from the tag being released.
+        run: |
+          git fetch --depth=1 origin "${{ github.event.repository.default_branch }}"
+          git checkout FETCH_HEAD -- packaging/linux-packages.sh
       - name: Install packaging tools
-        run: sudo apt-get update && sudo apt-get install -y dpkg-dev fakeroot zstd libarchive-tools makepkg pacman-package-manager
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev fakeroot zstd libarchive-tools makepkg pacman-package-manager
+          # alpm cannot create its database under /var/lib as the runner user.
+          sudo mkdir -p /var/lib/pacman/local /var/cache/pacman/pkg
       - name: Build Linux tree, tarball and packages
         env:
           # Pacman's dependency check cannot resolve Arch package names on a Debian runner.
