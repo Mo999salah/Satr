@@ -84,7 +84,14 @@ package() {
   install -Dm644 "\$pkgdir/usr/lib/satr/LICENSE" "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
 }
 EOF
-(cd "$arch" && makepkg -f --noconfirm)
+makepkg_flags=(-f --noconfirm)
+# Debian/Ubuntu build hosts have no pacman database, so Arch dependency names cannot be
+# resolved there. Set SATR_MAKEPKG_NODEPS=1 on those hosts (the packaging builds nothing,
+# it only copies the published tree).
+if [[ "${SATR_MAKEPKG_NODEPS:-0}" == "1" ]]; then
+    makepkg_flags+=(--nodeps)
+fi
+(cd "$arch" && makepkg "${makepkg_flags[@]}")
 shopt -s nullglob
 built=("$arch"/satr-"$version"-*.pkg.tar.zst "$arch"/satr-"$version"-*.pkg.tar.xz)
 test "${#built[@]}" -eq 1 || { printf 'expected one Arch package, got %s\n' "${#built[@]}" >&2; exit 1; }
