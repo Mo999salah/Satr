@@ -8,6 +8,8 @@ internal static class OmpCapture
     public const string Script = """
 import fs from "node:fs";
 
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
 export default function (pi) {
   pi.on("agent_end", async event => {
     const target = process.env.SATR_AI_CAPTURE_FILE;
@@ -19,14 +21,26 @@ export default function (pi) {
           .filter(c => c?.type === "text" && typeof c.text === "string" && c.text.length > 0)
           .map(c => c.text);
         if (texts.length > 0) {
+          const payload = texts.join("\n");
           const tmp = `${target}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
           try {
-            fs.writeFileSync(tmp, texts.join("\n"), "utf8");
-            fs.renameSync(tmp, target);
+            fs.writeFileSync(tmp, payload, "utf8");
           } catch {
-            try { fs.unlinkSync(tmp); } catch {}
+            return;
           }
-          break;
+          for (let attempt = 0; attempt < 4; attempt++) {
+            try {
+              fs.renameSync(tmp, target);
+              return;
+            } catch (err) {
+              if (err?.code !== "EPERM" || attempt === 3) {
+                try { fs.unlinkSync(tmp); } catch {}
+                return;
+              }
+              await delay(50);
+            }
+          }
+          return;
         }
       }
     }

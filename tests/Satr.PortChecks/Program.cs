@@ -1,4 +1,5 @@
 using Avalonia.Input;
+using System.Diagnostics;
 using Satr;
 
 // Explicit opt-in checks: never spawn a shell, a GUI, or an AI tool.
@@ -104,7 +105,7 @@ try
     File.WriteAllText(harnessScript, $$"""
         import fs from "node:fs";
         import path from "node:path";
-        import plugin from {{System.Text.Json.JsonSerializer.Serialize(testPluginMjs.Replace('\\', '/'))}};
+        import plugin from {{System.Text.Json.JsonSerializer.Serialize(new Uri(testPluginMjs).AbsoluteUri)}};
         const listeners = {};
         const pi = { on: (event, handler) => { listeners[event] = handler; } };
         plugin(pi);
@@ -192,33 +193,88 @@ try
         Check(jsProc.ExitCode == 0, $"{Path.GetFileName(jsRuntime)} test harness failed: {jsProc.StandardError.ReadToEnd()}");
         Check(File.ReadAllText(captureFile, System.Text.Encoding.UTF8) == "مرحبا بالعالم - Hello 123 - اختبار النص العربي", "arabic/mixed unicode captured exact");
     }
-    var shareTarget = Path.Combine(temporary, "share-test.txt");
-    var shareReplacement = Path.Combine(temporary, "share-replacement.txt");
-    File.WriteAllText(shareTarget, "original capture payload", System.Text.Encoding.UTF8);
-    File.WriteAllText(shareReplacement, "replaced capture payload", System.Text.Encoding.UTF8);
-    await using (var readStream = new FileStream(
-        shareTarget,
-        FileMode.Open,
-        FileAccess.Read,
-        FileShare.ReadWrite | FileShare.Delete,
-        bufferSize: 4096,
-        useAsync: true))
+    // Regression: Omp extension concurrent with open C# read handle.
+    // On Linux, rename succeeds on an open file; on Windows it fails with EPERM.
+    // The built-in retry must succeed after the handle closes — within the same agent_end.
     {
-        File.Move(shareReplacement, shareTarget, overwrite: true);
-        using var reader1 = new StreamReader(readStream, System.Text.Encoding.UTF8);
-        var originalContent = await reader1.ReadToEndAsync();
-        Check(originalContent == "original capture payload", "concurrent open stream reads complete original payload after replace");
+        var captureTarget = Path.Combine(temporary, "omp-capture-regression.txt");
+        var captureExt = Path.Combine(temporary, "omp-capture-ext.mjs");
+        var captureHarness = Path.Combine(temporary, "omp-capture-harness.mjs");
+        File.WriteAllText(captureTarget, "old response", new System.Text.UTF8Encoding(false));
+        File.WriteAllText(captureExt, OmpCapture.Script, System.Text.Encoding.UTF8);
+        var extUri = new Uri(Path.GetFullPath(captureExt)).AbsoluteUri;
+        File.WriteAllText(captureHarness, $$"""
+            import plugin from "{{extUri}}";
+            const listeners = {};
+            const pi = { on: (event, handler) => { listeners[event] = handler; } };
+            plugin(pi);
+            const agentEnd = listeners["agent_end"];
+            if (!agentEnd) throw new Error("agent_end not registered");
+            await agentEnd({ messages: [{ role: "assistant", content: [{ type: "text", text: "new response" }] }] });
+            """, System.Text.Encoding.UTF8);
 
-        await using var newStream = new FileStream(
-            shareTarget,
+        var regressionJs = PtySession.FindExecutable("node") ?? PtySession.FindExecutable("bun");
+        Check(regressionJs is not null, "node/bun available for capture regression");
+
+        // Open the capture target exactly like CopyLastAiResponse — no await using,
+        // we release the handle explicitly during the Node retry window.
+        var readStream = new FileStream(
+            captureTarget,
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete,
             bufferSize: 4096,
             useAsync: true);
-        using var reader2 = new StreamReader(newStream, System.Text.Encoding.UTF8);
-        var newContent = await reader2.ReadToEndAsync();
-        Check(newContent == "replaced capture payload", "subsequent stream reads complete new payload after replace");
+        var reader = new StreamReader(readStream, new System.Text.UTF8Encoding(false));
+
+        readStream.Position = 0;
+        var before = await reader.ReadToEndAsync();
+        Check(before == "old response", "capture regression: open stream reads original");
+
+        // Start a SINGLE agent_end invocation while the handle is open.
+        var psi = new ProcessStartInfo { FileName = regressionJs!, RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
+        psi.ArgumentList.Add(captureHarness);
+        psi.Environment["SATR_AI_CAPTURE_FILE"] = captureTarget;
+        var nodeProc = Process.Start(psi)!;
+
+        // Poll until the production extension's temp file actually appears.
+        var tmpPattern = Path.GetFileName(captureTarget) + ".tmp.*";
+        var pollDeadline = Stopwatch.StartNew();
+        string[] found;
+        while ((found = Directory.GetFiles(temporary, tmpPattern)).Length == 0)
+        {
+            Check(pollDeadline.ElapsedMilliseconds < 3000, "capture regression: temp file never appeared");
+            await Task.Delay(5);
+        }
+        var tmpFile = found[0];
+
+        // Keep the C# handle open long enough for the initial rename to hit the lock.
+        await Task.Delay(65);
+        Check(!nodeProc.HasExited, "capture regression: node still running while handle is open");
+        Check(File.Exists(tmpFile), "capture regression: temp file exists while handle is open");
+
+        // Release the handle — the retry window is now open.
+        await readStream.DisposeAsync();
+        reader.Dispose();
+
+        // Wait for the same agent_end to succeed on retry.
+        nodeProc.WaitForExit();
+        Check(nodeProc.ExitCode == 0, "capture regression: same agent_end succeeded after handle release");
+
+        // The open reader must have seen only the original content.
+        // (checked above — before reading was "old response")
+
+        // A fresh reader must see the new content written by the retry.
+        var finalContent = File.ReadAllText(captureTarget, new System.Text.UTF8Encoding(false));
+        Check(finalContent == "new response", "capture regression: fresh read sees new response from same agent_end");
+
+        // No leftover temp files.
+        var tmpFiles = Directory.GetFiles(temporary, Path.GetFileName(captureTarget) + ".tmp.*");
+        Check(tmpFiles.Length == 0, "capture regression: no temp files remain after retry");
+
+        File.Delete(captureTarget);
+        File.Delete(captureExt);
+        File.Delete(captureHarness);
     }
     var preferences = new SavedWorkspace([new SavedTab("Codex", temporary, "", true, Transcript: "مرحبا", ConversationId: conversation)], 0,
         Projects: [new SavedProject(temporary, true, true)], SidebarHidden: true, SidebarWidth: 310, SaveTranscripts: true);
