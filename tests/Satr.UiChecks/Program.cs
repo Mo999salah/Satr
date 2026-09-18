@@ -1,4 +1,5 @@
 using System.Reflection;
+using Avalonia.Input.Platform;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -192,6 +193,67 @@ class UiChecks : Application
                 var menuText = terminalMenu is null ? "" : string.Join("\n", terminalMenu.Items.OfType<MenuItem>().Select(i => i.Header?.ToString() ?? ""));
                 foreach (var action in new[] { "copy", "paste", "select", "search" })
                     Check(menuText.Contains(action, StringComparison.OrdinalIgnoreCase), $"Terminal menu must expose {action} on every platform.");
+                // Copy last AI response: Shell sessions refuse; Omp sessions copy the capture file.
+                var tabForAi = Field(window, "_active");
+                var aiTabType = tabForAi.GetType();
+                var profileField = aiTabType.GetField("Profile")!;
+                var captureField = aiTabType.GetField("AiCaptureFile")!;
+                var origProfile = (string)profileField.GetValue(tabForAi)!;
+                var origCapture = (string?)captureField.GetValue(tabForAi);
+                var statusBlock = (TextBlock)Field(window, "_status");
+                var testCaptureFile = Path.Combine(Path.GetTempPath(), "satr-ai-" + Guid.NewGuid().ToString("N") + ".txt");
+                try
+                {
+                    Call(window, "ClearError", null!, EventArgs.Empty);
+                    if (window.Clipboard is { } cb) await cb.SetTextAsync("sentinel-no-copy");
+                    profileField.SetValue(tabForAi, "Shell");
+                    Call(window, "CopyLastAiResponse");
+                    Check(statusBlock.Text == "Only Omp sessions support copying AI responses.",
+                        "CopyLastAiResponse on Shell session must report unsupported profile.");
+                    if (window.Clipboard is { } cb2)
+                        Check(await cb2.TryGetTextAsync() == "sentinel-no-copy",
+                            "CopyLastAiResponse on Shell session must not copy to clipboard.");
+
+                    profileField.SetValue(tabForAi, "Omp");
+
+                    // Non-existent capture file:
+                    captureField.SetValue(tabForAi, testCaptureFile);
+                    if (File.Exists(testCaptureFile)) File.Delete(testCaptureFile);
+                    statusBlock.Text = "";
+                    Call(window, "CopyLastAiResponse");
+                    Check(statusBlock.Text == "No AI response available yet.",
+                        "Missing capture file must surface 'No AI response available yet.'");
+
+                    // Empty capture file:
+                    File.WriteAllText(testCaptureFile, "");
+                    statusBlock.Text = "";
+                    Call(window, "CopyLastAiResponse");
+                    for (var i = 0; i < 20 && statusBlock.Text != "No AI response available yet."; i++)
+                        await Task.Delay(50);
+                    Check(statusBlock.Text == "No AI response available yet.",
+                        "Empty capture file must surface 'No AI response available yet.'");
+
+                    // Populated capture file:
+                    const string expectedAiResponse = "مرحبا بالعالم — AI response test";
+                    File.WriteAllText(testCaptureFile, expectedAiResponse);
+                    statusBlock.Text = "";
+                    Call(window, "CopyLastAiResponse");
+                    for (var i = 0; i < 20 && statusBlock.Text != "Last AI response copied."; i++)
+                        await Task.Delay(50);
+                    Check(statusBlock.Text == "Last AI response copied.",
+                        "Populated capture file must surface 'Last AI response copied.'");
+                    if (window.Clipboard is { } cb3)
+                    {
+                        var clipText = await cb3.TryGetTextAsync();
+                        Check(clipText == expectedAiResponse, "Clipboard text must match AI capture file.");
+                    }
+                }
+                finally
+                {
+                    profileField.SetValue(tabForAi, origProfile);
+                    captureField.SetValue(tabForAi, origCapture);
+                    if (File.Exists(testCaptureFile)) File.Delete(testCaptureFile);
+                }
                 // Mouse tracking context menu bypass:
                 // Normal right-click inside a mouse-tracking TUI is swallowed so the TUI gets the event;
                 // Shift + right-click bypasses mouse tracking to open Satr's context menu.

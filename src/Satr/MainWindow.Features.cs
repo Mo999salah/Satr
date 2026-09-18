@@ -156,6 +156,11 @@ public sealed partial class MainWindow
             {
                 tab.Buffer = new TerminalBuffer(tab.Columns, tab.Rows, _scrollbackRows);
                 tab.Snapshot = null; tab.Dirty = true; tab.Finished = false; tab.Failed = false; tab.NeedsAttention = false; tab.SynchronizedSince = 0;
+                if (tab.AiCaptureFile is not null)
+                {
+                    try { File.Delete(tab.AiCaptureFile); } catch { }
+                    tab.AiCaptureFile = null;
+                }
             }
             tab.Offset = 0; tab.Selection = (null, null); tab.Follow = true;
             if (_active == tab) { _terminal.Clear(); Render(); }

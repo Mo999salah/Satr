@@ -45,6 +45,7 @@ public sealed partial class MainWindow : Window
         public Border Pip = Ui.Pip();
         public string Transcript = "";
         public string? ConversationId;
+        public string? AiCaptureFile;
         public LaunchPlan? Launch;
         public bool Transient;
         public bool Failed, NeedsAttention;
@@ -100,6 +101,9 @@ public sealed partial class MainWindow : Window
         terminalMenu.Items.Add(Item(Ui.L("Copy selection"), CopySelection));
         terminalMenu.Items.Add(Item(Ui.L("Paste into terminal"), Paste));
         terminalMenu.Items.Add(Item(Ui.L("Select all"), () => _terminal.SelectAll()));
+        var copyAi = Item(Ui.L("Copy last AI response"), CopyLastAiResponse);
+        terminalMenu.Items.Add(copyAi);
+        terminalMenu.Opening += (_, _) => copyAi.IsVisible = _active?.Profile is "Omp" or "OmpResume";
         terminalMenu.Items.Add(new Separator());
         terminalMenu.Items.Add(Item("Search — Ctrl+Shift+F", OpenSearch));
         _terminal.ContextMenu = terminalMenu;
@@ -522,9 +526,15 @@ public sealed partial class MainWindow : Window
         try
         {
             var directory = LaunchDirectory(tab.Profile, tab.Project, tab.Directory);
+            Dictionary<string, string>? extraEnv = null;
+            if (tab.Profile is "Omp" or "OmpResume")
+            {
+                tab.AiCaptureFile = Path.Combine(Path.GetTempPath(), $"satr-omp-ai-{Guid.NewGuid():N}.txt");
+                extraEnv = new Dictionary<string, string> { ["SATR_AI_CAPTURE_FILE"] = tab.AiCaptureFile };
+            }
             var session = tab.Launch is { } launch
-                ? await PtySession.Start(launch, directory, tab.Columns, tab.Rows, _shutdown.Token)
-                : await PtySession.Start(tab.Profile, directory, tab.Columns, tab.Rows, _shutdown.Token, tab.ConversationId);
+                ? await PtySession.Start(launch, directory, tab.Columns, tab.Rows, _shutdown.Token, extraEnv)
+                : await PtySession.Start(tab.Profile, directory, tab.Columns, tab.Rows, _shutdown.Token, tab.ConversationId, extraEnv);
             if (_closed || _closing || tab.Closed) { await session.DisposeAsync(); return; }
             tab.Session = session;
             session.Output += async text =>
@@ -592,6 +602,11 @@ public sealed partial class MainWindow : Window
             }
         }
         catch (Exception ex) { StatusError("Tab not closed: draft archiving failed: " + ex.Message); return; }
+        if (tab.AiCaptureFile is not null)
+        {
+            try { File.Delete(tab.AiCaptureFile); } catch { }
+            tab.AiCaptureFile = null;
+        }
         tab.Closed = true;
         _tabs.Remove(tab); RefreshProjectGroups();
         if (ReferenceEquals(_active, tab))
@@ -807,6 +822,36 @@ public sealed partial class MainWindow : Window
             await clipboard.SetTextAsync(_terminal.GetSelectedText()); Status("Selection copied.");
         }
         catch (Exception ex) { StatusError(ex.Message); }
+    }
+    private async void CopyLastAiResponse()
+    {
+        if (_active is not { } tab) return;
+        if (tab.Profile is not ("Omp" or "OmpResume"))
+        {
+            Status("Only Omp sessions support copying AI responses.");
+            return;
+        }
+        if (Clipboard is not { } clipboard) return;
+        if (string.IsNullOrEmpty(tab.AiCaptureFile) || !File.Exists(tab.AiCaptureFile))
+        {
+            Status("No AI response available yet.");
+            return;
+        }
+        try
+        {
+            var text = await File.ReadAllTextAsync(tab.AiCaptureFile, Encoding.UTF8);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                Status("No AI response available yet.");
+                return;
+            }
+            await clipboard.SetTextAsync(text);
+            Status("Last AI response copied.");
+        }
+        catch (Exception ex)
+        {
+            StatusError("Copy failed: " + ex.Message);
+        }
     }
     private void CopyPath() { if (_active is { } tab) CopyDirectory(tab.Directory); }
     private async void CopyDirectory(string directory)

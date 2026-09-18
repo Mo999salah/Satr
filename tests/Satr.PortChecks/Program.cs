@@ -40,7 +40,12 @@ Check(MainWindow.ValidateShortcuts(new() { ["Select all"] = "Ctrl+Shift+A" })["S
 Check(MainWindow.ValidateShortcuts(new() { ["Select all"] = "Ctrl+Alt+A" })["Select all"] == "Ctrl+Alt+A", "custom select-all binding is preserved");
 var conversation = "01234567-89ab-cdef-0123-456789abcdef";
 Check(ProfileCatalog.ResolveLaunch("Codex", _ => "/opt/codex", conversation).Arguments is ["resume", "01234567-89ab-cdef-0123-456789abcdef"], "exact codex binding");
-Check(ProfileCatalog.ResolveLaunch("Omp", _ => "/opt/omp", conversation).Arguments is ["--resume", "01234567-89ab-cdef-0123-456789abcdef"], "exact omp binding");
+var extensionPath = OmpCapture.EnsureExtension();
+Check(ProfileCatalog.ResolveLaunch("Omp", _ => "/opt/omp", conversation).Arguments is ["--resume", "01234567-89ab-cdef-0123-456789abcdef", "--extension", var ompExt] && ompExt == extensionPath, "exact omp binding");
+var ompPlan = ProfileCatalog.ResolveLaunch("Omp", name => name == "omp" ? "/opt/omp" : null);
+Check(ompPlan.App == "/opt/omp" && ompPlan.Arguments is ["--extension", var freshExt] && freshExt == extensionPath, "omp fresh launch includes extension");
+var ompResumePlan = ProfileCatalog.ResolveLaunch("OmpResume", name => name == "omp" ? "/opt/omp" : null);
+Check(ompResumePlan.App == "/opt/omp" && ompResumePlan.Arguments is ["--continue", "--extension", var resumeExt] && resumeExt == extensionPath, "omp resume launch includes continue and extension");
 try { ProfileCatalog.ResolveLaunch("Codex", _ => "/opt/codex", "--bad & command"); throw new Exception("invalid ID accepted"); } catch (ArgumentException) { }
 var threw = false;
 try { ProfileCatalog.ResolveLaunch("Claude", _ => null); } catch (FileNotFoundException) { threw = true; }
@@ -51,6 +56,8 @@ if (OperatingSystem.IsWindows())
 {
     var wrapped = ProfileCatalog.ResolveLaunch("AgyResume", _ => @"C:\tools\agy.cmd");
     Check(wrapped.App.EndsWith("cmd.exe", StringComparison.OrdinalIgnoreCase) && wrapped.Arguments is ["/D", "/V:OFF", "/S", "/C", "\"\"C:\\tools\\agy.cmd\" --continue\""], "windows wrapper preserves resolved path");
+    var wrappedOmp = ProfileCatalog.ResolveLaunch("OmpResume", _ => @"C:\tools\omp.cmd");
+    Check(wrappedOmp.App.EndsWith("cmd.exe", StringComparison.OrdinalIgnoreCase) && wrappedOmp.Arguments is ["/D", "/V:OFF", "/S", "/C", var ompCmd] && ompCmd.Contains("--continue") && ompCmd.Contains("--extension"), "windows wrapper preserves omp arguments");
 }
 Check(MainWindow.ResolveProfile("Mystery", restoring: true) == "Mystery", "restore keeps unknown profiles");
 Check(MainWindow.ResolveProfile("Mystery", restoring: false) == "Shell", "interactive unknown profiles become shell");
@@ -78,6 +85,85 @@ try
 {
     Environment.SetEnvironmentVariable("SATR_DATA_DIR", temporary);
     Check(WorkspaceStore.DataDirectory == temporary, "data override");
+    var scopedExt = OmpCapture.EnsureExtension();
+    Check(File.Exists(scopedExt) && Path.GetDirectoryName(scopedExt) == temporary, "omp extension created in active data directory");
+    Check(File.ReadAllText(scopedExt, System.Text.Encoding.UTF8) == OmpCapture.Script, "omp extension file content matches capture script");
+    File.WriteAllText(scopedExt, "// tampered content");
+    Check(OmpCapture.EnsureExtension() == scopedExt, "extension path stable after re-ensure");
+    Check(File.ReadAllText(scopedExt, System.Text.Encoding.UTF8) == OmpCapture.Script, "tampered extension file restored by EnsureExtension");
+    Check(OmpCapture.Script.Contains("process.env.SATR_AI_CAPTURE_FILE"), "capture script references SATR_AI_CAPTURE_FILE");
+    Check(OmpCapture.Script.Contains("agent_end"), "capture script hooks agent_end");
+    Check(OmpCapture.Script.Contains("role === \"assistant\""), "capture script inspects assistant role");
+    Check(OmpCapture.Script.Contains("type === \"text\""), "capture script extracts text content");
+    Check(OmpCapture.Script.Contains("renameSync") && OmpCapture.Script.Contains("writeFileSync"), "capture script writes atomically via temporary file and rename");
+    var captureFile = Path.Combine(temporary, "capture.txt");
+    var harnessScript = Path.Combine(temporary, "test-capture.mjs");
+    File.WriteAllText(harnessScript, $$"""
+        import plugin from {{System.Text.Json.JsonSerializer.Serialize(scopedExt)}};
+        const listeners = {};
+        const pi = { on: (event, handler) => { listeners[event] = handler; } };
+        plugin(pi);
+        const agentEnd = listeners["agent_end"];
+        if (!agentEnd) throw new Error("agent_end not registered");
+
+        // Scenario 1: assistant text + tool call captures only assistant text
+        await agentEnd({
+          messages: [
+            { role: "user", content: [{ type: "text", text: "hi" }] },
+            { role: "assistant", content: [
+                { type: "text", text: "Assistant response 1" },
+                { type: "tool_use", name: "tool1", input: {} }
+              ]
+            }
+          ]
+        });
+        if (await Bun.file(process.env.SATR_AI_CAPTURE_FILE).text() !== "Assistant response 1")
+          throw new Error("scenario 1 failed");
+
+        // Scenario 2: trailing tool-call-only assistant message does not replace last valid text response with empty content
+        await agentEnd({
+          messages: [
+            { role: "assistant", content: [{ type: "text", text: "Assistant response 1" }] },
+            { role: "tool", content: [{ type: "text", text: "tool result" }] },
+            { role: "assistant", content: [{ type: "tool_use", name: "tool2", input: {} }] }
+          ]
+        });
+        if (await Bun.file(process.env.SATR_AI_CAPTURE_FILE).text() !== "Assistant response 1")
+          throw new Error("scenario 2 failed");
+
+        // Scenario 3: second real assistant text response atomically replaces first
+        await agentEnd({
+          messages: [
+            { role: "assistant", content: [{ type: "text", text: "Assistant response 1" }] },
+            { role: "user", content: [{ type: "text", text: "next" }] },
+            { role: "assistant", content: [{ type: "text", text: "Assistant response 2" }] }
+          ]
+        });
+        if (await Bun.file(process.env.SATR_AI_CAPTURE_FILE).text() !== "Assistant response 2")
+          throw new Error("scenario 3 failed");
+
+        // Scenario 4: Arabic/mixed Unicode is exact
+        const unicodeText = "مرحبا بالعالم - Hello 123 - اختبار النص العربي";
+        await agentEnd({
+          messages: [
+            { role: "assistant", content: [{ type: "text", text: unicodeText }] }
+          ]
+        });
+        if (await Bun.file(process.env.SATR_AI_CAPTURE_FILE).text() !== unicodeText)
+          throw new Error("scenario 4 failed");
+        """);
+    var bunProc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+    {
+        FileName = "bun",
+        Arguments = harnessScript,
+        Environment = { ["SATR_AI_CAPTURE_FILE"] = captureFile },
+        RedirectStandardError = true,
+        RedirectStandardOutput = true,
+        UseShellExecute = false
+    })!;
+    bunProc.WaitForExit();
+    Check(bunProc.ExitCode == 0, $"bun test harness failed: {bunProc.StandardError.ReadToEnd()}");
+    Check(File.ReadAllText(captureFile, System.Text.Encoding.UTF8) == "مرحبا بالعالم - Hello 123 - اختبار النص العربي", "arabic/mixed unicode captured exact");
     var preferences = new SavedWorkspace([new SavedTab("Codex", temporary, "", true, Transcript: "مرحبا", ConversationId: conversation)], 0,
         Projects: [new SavedProject(temporary, true, true)], SidebarHidden: true, SidebarWidth: 310, SaveTranscripts: true);
     WorkspaceStore.Save(WorkspaceStore.StatePath, preferences);

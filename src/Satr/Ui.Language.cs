@@ -39,6 +39,7 @@ internal static partial class Ui
         ["No open sessions"] = "لا توجد جلسات مفتوحة", ["Open a folder to work in"] = "افتح مجلدًا للعمل فيه",
         ["Copy selection"] = "نسخ التحديد", ["Paste into terminal"] = "لصق في الطرفية",
         ["Readable transcript"] = "النص المقروء", ["Paste image as file path"] = "لصق الصورة كمسار ملف",
+        ["Copy last AI response"] = "نسخ آخر رد للذكاء الاصطناعي",
         ["Copy folder path"] = "نسخ مسار المجلد", ["Reopen finished session"] = "إعادة فتح الجلسة المنتهية",
         ["New window"] = "نافذة جديدة", ["Select all"] = "تحديد الكل",
         ["Rename session"] = "تسمية الجلسة", ["Move session up"] = "نقل الجلسة لأعلى",

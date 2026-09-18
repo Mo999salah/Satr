@@ -23,14 +23,14 @@ internal sealed class PtySession : IAsyncDisposable
         _writer = WriteLoop();
     }
 
-    public static async Task<PtySession> Start(string profile, string directory, int columns, int rows, CancellationToken token, string? conversationId = null)
+    public static async Task<PtySession> Start(string profile, string directory, int columns, int rows, CancellationToken token, string? conversationId = null, IReadOnlyDictionary<string, string>? extraEnvironment = null)
     {
         if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
         var plan = ProfileCatalog.ResolveLaunch(profile, FindExecutable, conversationId);
-        return await Start(plan, directory, columns, rows, token);
+        return await Start(plan, directory, columns, rows, token, extraEnvironment);
     }
 
-    public static async Task<PtySession> Start(LaunchPlan plan, string directory, int columns, int rows, CancellationToken token)
+    public static async Task<PtySession> Start(LaunchPlan plan, string directory, int columns, int rows, CancellationToken token, IReadOnlyDictionary<string, string>? extraEnvironment = null)
     {
         if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
         var app = plan.App;
@@ -38,6 +38,11 @@ internal sealed class PtySession : IAsyncDisposable
         var environment = new Dictionary<string, string> { ["TERM"] = "xterm-256color", ["COLORTERM"] = "truecolor" };
         if (!OperatingSystem.IsWindows() && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("LANG")))
             environment["LANG"] = "C.UTF-8";
+        if (extraEnvironment is not null)
+        {
+            foreach (var (k, v) in extraEnvironment)
+                environment[k] = v;
+        }
         var pty = await PtyProvider.SpawnAsync(new PtyOptions
         {
             Name = "Satr", App = app, CommandLine = args, Cwd = directory,

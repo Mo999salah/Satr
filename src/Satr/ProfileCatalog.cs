@@ -107,6 +107,8 @@ internal static class ProfileCatalog
                     _ => throw new NotSupportedException("Exact conversation binding is currently supported for Codex and Omp.")
                 };
             }
+            if (tool == "omp")
+                extra = [.. extra, "--extension", OmpCapture.EnsureExtension()];
             if (OperatingSystem.IsWindows() && (Path.GetExtension(app).Equals(".cmd", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(app).Equals(".bat", StringComparison.OrdinalIgnoreCase)))
             {
                 if (app.Contains('%') || app.Contains('"') || app.Any(char.IsControl))
