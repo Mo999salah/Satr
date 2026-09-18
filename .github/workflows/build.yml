@@ -64,8 +64,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y dpkg-dev fakeroot zstd libarchive-tools makepkg pacman-package-manager
-          # alpm cannot create its database under /var/lib as the runner user.
-          sudo mkdir -p /var/lib/pacman/local /var/cache/pacman/pkg
+          # alpm cannot create its local database under /var/lib as the runner user, and
+          # makepkg reads it while it writes .BUILDINFO.
+          sudo mkdir -p /var/lib/pacman/local
+          sudo pacman-db-upgrade || true
+          # Host configs disagree about the package format; the published name must not.
+          printf 'source /etc/makepkg.conf\nPKGEXT=".pkg.tar.zst"\n' > "$RUNNER_TEMP/makepkg-ci.conf"
+          echo "SATR_MAKEPKG_CONFIG=$RUNNER_TEMP/makepkg-ci.conf" >> "$GITHUB_ENV"
       - name: Build Linux tree, tarball and packages
         env:
           # Pacman's dependency check cannot resolve Arch package names on a Debian runner.

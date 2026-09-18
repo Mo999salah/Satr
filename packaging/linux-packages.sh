@@ -84,17 +84,30 @@ package() {
   install -Dm644 "\$pkgdir/usr/lib/satr/LICENSE" "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
 }
 EOF
-makepkg_flags=(-f --noconfirm)
+makepkg_args=(-f --noconfirm)
 # Debian/Ubuntu build hosts have no pacman database, so Arch dependency names cannot be
 # resolved there. Set SATR_MAKEPKG_NODEPS=1 on those hosts (the packaging builds nothing,
 # it only copies the published tree).
 if [[ "${SATR_MAKEPKG_NODEPS:-0}" == "1" ]]; then
-    makepkg_flags+=(--nodeps)
+    makepkg_args+=(--nodeps)
 fi
-(cd "$arch" && makepkg "${makepkg_flags[@]}")
+# Build hosts ship different /etc/makepkg.conf files; use a pinned one when given.
+if [[ -n "${SATR_MAKEPKG_CONFIG:-}" ]]; then
+    makepkg_args+=(--config "$SATR_MAKEPKG_CONFIG")
+fi
+(cd "$arch" && makepkg "${makepkg_args[@]}")
 shopt -s nullglob
-built=("$arch"/satr-"$version"-*.pkg.tar.zst "$arch"/satr-"$version"-*.pkg.tar.xz)
-test "${#built[@]}" -eq 1 || { printf 'expected one Arch package, got %s\n' "${#built[@]}" >&2; exit 1; }
+# Ask makepkg where the package landed instead of assuming the host's PKGDEST/PKGEXT.
+mapfile -t built < <(cd "$arch" && makepkg "${makepkg_args[@]}" --packagelist)
+if [[ "${#built[@]}" -ne 1 || ! -f "${built[0]}" ]]; then
+    printf 'expected one Arch package, got %s\n' "${#built[@]}" >&2
+    ls -l -- "$arch" >&2
+    exit 1
+fi
+case "${built[0]}" in
+    *.pkg.tar.zst) ;;
+    *) printf 'unexpected Arch package format: %s\n' "${built[0]}" >&2; exit 1 ;;
+esac
 cp -f -- "${built[0]}" "$out/$pkg_name"
 
 if command -v repo-add >/dev/null; then
