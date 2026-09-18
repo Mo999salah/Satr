@@ -64,7 +64,7 @@ Snapshot storage is off by default because output may contain sensitive content.
 | Platform | Package |
 | --- | --- |
 | Windows x64 | [Release installer and portable ZIP](https://github.com/Mo999salah/Satr/releases) |
-| Linux x64 | [Portable `.tar.gz`](https://github.com/Mo999salah/Satr/releases) |
+| Linux x64 | Portable `.tar.gz`, DEB package, and Pacman repository ([release assets](https://github.com/Mo999salah/Satr/releases)) |
 | Source | GitHub source archive |
 
 Packages ship the .NET runtime. Install AI tools separately. The Windows installer is unsigned. No AUR package is published.

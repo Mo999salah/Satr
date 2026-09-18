@@ -1,6 +1,6 @@
 # Maintainer: Mohamad Salah <98090972+Mo999salah@users.noreply.github.com>
 pkgname=satr-bin
-pkgver=0.4.0
+pkgver=0.5.0
 pkgrel=1
 pkgdesc='Project workspace terminal for AI coding CLIs'
 arch=('x86_64')
@@ -12,8 +12,8 @@ conflicts=('satr')
 options=('!strip' '!debug')
 source=("https://github.com/Mo999salah/Satr/releases/download/v$pkgver/Satr-$pkgver-linux-x64.tar.gz"
         'satr.desktop')
-sha256sums=('92cbf9fe1c64eb52c95856777fbd62cb0536e6eb9aabad793cf2aea52a4d7268'
-            'b825c1dd21f688af13bab2c719d270e4b94b0309fb63410ae55fb2b862bb0af1')
+sha256sums=('280482b1b295406ef26c76ff0aa343b5cb268894601dd4fab0b77ddd08417e92'
+            '25c59e5e3b2d57cff1b228c25386d221182c9a3185227858a87dee46dcdd144e')
 
 package() {
   install -d "$pkgdir/usr/lib/satr"
