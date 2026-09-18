@@ -91,6 +91,29 @@ bash install-linux.sh
 
 `install-linux.sh` installs to `$XDG_DATA_HOME/satr` (or `~/.local/share/satr`), adds **Satr** for a plain terminal and **Satr Workspace** for saved projects, and removes legacy `satr-preview` launchers. `bash uninstall-linux.sh` removes the app but keeps workspace data. Do not run either script with `sudo`.
 
+#### DEB (Debian/Ubuntu)
+
+The `pacman -S --needed` line above is only required for the tarball flow — the packages below declare their dependencies themselves.
+
+```bash
+curl -fsSLO https://github.com/Mo999salah/Satr/releases/download/v0.5.0/satr_0.5.0_amd64.deb
+sudo apt install ./satr_0.5.0_amd64.deb
+```
+
+Installs system-wide to `/usr/lib/satr`, puts `satr` on `PATH` through `/usr/bin/satr`, and registers both menu entries. `sudo apt remove satr` removes it.
+
+#### Pacman repository (Arch, CachyOS)
+
+Each release publishes the package together with its database. Add the repository, then install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mo999salah/Satr/main/packaging/satr-repo.conf | sudo tee /etc/pacman.d/satr.conf
+echo 'Include = /etc/pacman.d/satr.conf' | sudo tee -a /etc/pacman.conf
+sudo pacman -Syu satr
+```
+
+`sudo pacman -R satr` removes it. The repository is unsigned (`SigLevel = Optional TrustAll`), and its `Server` line is pinned to the release it ships with because GitHub's `/releases/latest/download` path serves a stale `satr.db` — point it at the new version when the next release lands.
+
 ## Capabilities
 
 **Terminal core** — ANSI parser, scrollback with resize reflow, alternate screen, application cursor keys, SGR mouse, focus reporting, OSC 7 working-directory tracking, OSC 8 hyperlinks, OSC 133 prompt marks.
