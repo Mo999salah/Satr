@@ -123,9 +123,12 @@ if command -v repo-add >/dev/null; then
 fi
 
 # --- check ---
-dpkg-deb -I "$out/$deb_name" | grep -q 'Package: satr'
-tar -tf "$out/$pkg_name" | grep -qx 'usr/bin/satr'
-if tar -tf "$out/$pkg_name" | grep -q 'install-linux.sh'; then
+dpkg-deb -I "$out/$deb_name" | grep -q 'Package: satr' || { printf 'unexpected DEB metadata in %s\n' "$deb_name" >&2; exit 1; }
+# List the package once: piping `tar -tf` into `grep -q` ends the pipe early, and tar then
+# fails with EPIPE on a package this size.
+package_entries="$(tar -tf "$out/$pkg_name")"
+grep -qx 'usr/bin/satr' <<<"$package_entries" || { printf 'missing usr/bin/satr in %s\n' "$pkg_name" >&2; exit 1; }
+if grep -q 'install-linux.sh' <<<"$package_entries"; then
     printf 'install-linux.sh leaked into %s\n' "$pkg_name" >&2
     exit 1
 fi
