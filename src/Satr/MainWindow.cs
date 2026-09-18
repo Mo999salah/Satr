@@ -839,7 +839,15 @@ public sealed partial class MainWindow : Window
         }
         try
         {
-            var text = await File.ReadAllTextAsync(tab.AiCaptureFile, Encoding.UTF8);
+            await using var stream = new FileStream(
+                tab.AiCaptureFile,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 4096,
+                useAsync: true);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            var text = await reader.ReadToEndAsync();
             if (string.IsNullOrWhiteSpace(text))
             {
                 Status("No AI response available yet.");

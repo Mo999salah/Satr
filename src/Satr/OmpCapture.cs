@@ -19,7 +19,7 @@ export default function (pi) {
           .filter(c => c?.type === "text" && typeof c.text === "string" && c.text.length > 0)
           .map(c => c.text);
         if (texts.length > 0) {
-          const tmp = `${target}.tmp.${Date.now()}`;
+          const tmp = `${target}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}`;
           try {
             fs.writeFileSync(tmp, texts.join("\n"), "utf8");
             fs.renameSync(tmp, target);

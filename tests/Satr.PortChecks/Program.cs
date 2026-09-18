@@ -96,10 +96,15 @@ try
     Check(OmpCapture.Script.Contains("role === \"assistant\""), "capture script inspects assistant role");
     Check(OmpCapture.Script.Contains("type === \"text\""), "capture script extracts text content");
     Check(OmpCapture.Script.Contains("renameSync") && OmpCapture.Script.Contains("writeFileSync"), "capture script writes atomically via temporary file and rename");
+    Check(OmpCapture.Script.Contains("process.pid"), "capture script uses collision-safe temp filename");
     var captureFile = Path.Combine(temporary, "capture.txt");
+    var testPluginMjs = Path.Combine(temporary, "test-plugin.mjs");
+    File.WriteAllText(testPluginMjs, OmpCapture.Script);
     var harnessScript = Path.Combine(temporary, "test-capture.mjs");
     File.WriteAllText(harnessScript, $$"""
-        import plugin from {{System.Text.Json.JsonSerializer.Serialize(scopedExt)}};
+        import fs from "node:fs";
+        import path from "node:path";
+        import plugin from {{System.Text.Json.JsonSerializer.Serialize(testPluginMjs.Replace('\\', '/'))}};
         const listeners = {};
         const pi = { on: (event, handler) => { listeners[event] = handler; } };
         plugin(pi);
@@ -117,7 +122,7 @@ try
             }
           ]
         });
-        if (await Bun.file(process.env.SATR_AI_CAPTURE_FILE).text() !== "Assistant response 1")
+        if (fs.readFileSync(process.env.SATR_AI_CAPTURE_FILE, "utf8") !== "Assistant response 1")
           throw new Error("scenario 1 failed");
 
         // Scenario 2: trailing tool-call-only assistant message does not replace last valid text response with empty content
@@ -128,7 +133,7 @@ try
             { role: "assistant", content: [{ type: "tool_use", name: "tool2", input: {} }] }
           ]
         });
-        if (await Bun.file(process.env.SATR_AI_CAPTURE_FILE).text() !== "Assistant response 1")
+        if (fs.readFileSync(process.env.SATR_AI_CAPTURE_FILE, "utf8") !== "Assistant response 1")
           throw new Error("scenario 2 failed");
 
         // Scenario 3: second real assistant text response atomically replaces first
@@ -139,7 +144,7 @@ try
             { role: "assistant", content: [{ type: "text", text: "Assistant response 2" }] }
           ]
         });
-        if (await Bun.file(process.env.SATR_AI_CAPTURE_FILE).text() !== "Assistant response 2")
+        if (fs.readFileSync(process.env.SATR_AI_CAPTURE_FILE, "utf8") !== "Assistant response 2")
           throw new Error("scenario 3 failed");
 
         // Scenario 4: Arabic/mixed Unicode is exact
@@ -149,21 +154,72 @@ try
             { role: "assistant", content: [{ type: "text", text: unicodeText }] }
           ]
         });
-        if (await Bun.file(process.env.SATR_AI_CAPTURE_FILE).text() !== unicodeText)
+        if (fs.readFileSync(process.env.SATR_AI_CAPTURE_FILE, "utf8") !== unicodeText)
           throw new Error("scenario 4 failed");
+
+        // Scenario 5: when renameSync throws, old response is not overwritten, and temp file is unlinked
+        const origRename = fs.renameSync;
+        fs.renameSync = () => { throw new Error("simulated rename failure"); };
+        try {
+          await agentEnd({
+            messages: [
+              { role: "assistant", content: [{ type: "text", text: "should not overwrite" }] }
+            ]
+          });
+        } finally {
+          fs.renameSync = origRename;
+        }
+        if (fs.readFileSync(process.env.SATR_AI_CAPTURE_FILE, "utf8") !== unicodeText)
+          throw new Error("scenario 5 failed: old response was overwritten");
+        const dirEntries = fs.readdirSync(path.dirname(process.env.SATR_AI_CAPTURE_FILE));
+        if (dirEntries.some(f => f.includes(".tmp.")))
+          throw new Error("scenario 5 failed: temp file not unlinked");
         """);
-    var bunProc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+    var jsRuntime = PtySession.FindExecutable("node") ?? PtySession.FindExecutable("bun");
+    if (jsRuntime is not null)
     {
-        FileName = "bun",
-        Arguments = harnessScript,
-        Environment = { ["SATR_AI_CAPTURE_FILE"] = captureFile },
-        RedirectStandardError = true,
-        RedirectStandardOutput = true,
-        UseShellExecute = false
-    })!;
-    bunProc.WaitForExit();
-    Check(bunProc.ExitCode == 0, $"bun test harness failed: {bunProc.StandardError.ReadToEnd()}");
-    Check(File.ReadAllText(captureFile, System.Text.Encoding.UTF8) == "مرحبا بالعالم - Hello 123 - اختبار النص العربي", "arabic/mixed unicode captured exact");
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = jsRuntime,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        };
+        startInfo.ArgumentList.Add(harnessScript);
+        startInfo.Environment["SATR_AI_CAPTURE_FILE"] = captureFile;
+        var jsProc = System.Diagnostics.Process.Start(startInfo)!;
+        jsProc.WaitForExit();
+        Check(jsProc.ExitCode == 0, $"{Path.GetFileName(jsRuntime)} test harness failed: {jsProc.StandardError.ReadToEnd()}");
+        Check(File.ReadAllText(captureFile, System.Text.Encoding.UTF8) == "مرحبا بالعالم - Hello 123 - اختبار النص العربي", "arabic/mixed unicode captured exact");
+    }
+    var shareTarget = Path.Combine(temporary, "share-test.txt");
+    var shareReplacement = Path.Combine(temporary, "share-replacement.txt");
+    File.WriteAllText(shareTarget, "original capture payload", System.Text.Encoding.UTF8);
+    File.WriteAllText(shareReplacement, "replaced capture payload", System.Text.Encoding.UTF8);
+    await using (var readStream = new FileStream(
+        shareTarget,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite | FileShare.Delete,
+        bufferSize: 4096,
+        useAsync: true))
+    {
+        File.Move(shareReplacement, shareTarget, overwrite: true);
+        using var reader1 = new StreamReader(readStream, System.Text.Encoding.UTF8);
+        var originalContent = await reader1.ReadToEndAsync();
+        Check(originalContent == "original capture payload", "concurrent open stream reads complete original payload after replace");
+
+        await using var newStream = new FileStream(
+            shareTarget,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 4096,
+            useAsync: true);
+        using var reader2 = new StreamReader(newStream, System.Text.Encoding.UTF8);
+        var newContent = await reader2.ReadToEndAsync();
+        Check(newContent == "replaced capture payload", "subsequent stream reads complete new payload after replace");
+    }
     var preferences = new SavedWorkspace([new SavedTab("Codex", temporary, "", true, Transcript: "مرحبا", ConversationId: conversation)], 0,
         Projects: [new SavedProject(temporary, true, true)], SidebarHidden: true, SidebarWidth: 310, SaveTranscripts: true);
     WorkspaceStore.Save(WorkspaceStore.StatePath, preferences);
