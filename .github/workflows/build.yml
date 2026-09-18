@@ -170,8 +170,13 @@ jobs:
             $expected[$parts[1].Trim()] = $parts[0].Trim()
           }
 
+          # The REST endpoint for a tag never returns a draft, so ask the CLI instead: it finds
+          # the draft an earlier attempt left behind and no second release is created.
           $exists = $true
-          try { gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" | Out-Null } catch { $exists = $false }
+          try {
+            gh release view $tag --json tagName 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) { $exists = $false }
+          } catch { $exists = $false }
           if (-not $exists) {
             $create = @('release', 'create', $tag, '--draft', '--title', $tag, '--generate-notes', '--verify-tag')
             if ($tag -match '-') { $create += '--prerelease' }
@@ -199,10 +204,11 @@ jobs:
           }
 
           $remote = @{}
-          foreach ($line in (gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets[] | "\(.name) \(.digest)"')) {
+          foreach ($line in (gh release view $tag --json assets --jq '.assets[] | "\(.name) \(.digest)"')) {
             $parts = $line -split ' ', 2
             $remote[$parts[0]] = $parts[1] -replace '^sha256:', ''
           }
+          if ($remote.Count -eq 0) { throw "Could not read back the assets of release $tag." }
           foreach ($name in $names) {
             if (-not $remote.ContainsKey($name)) { throw "Release $tag is missing asset $name." }
             if ($remote[$name] -ne $expected[$name]) { throw "Digest mismatch on $name ($($remote[$name]))." }
